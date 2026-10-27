@@ -596,8 +596,10 @@ def confirmed_salary_matching(c, context, payload):
     verified, profile, plan = {}, None, None
     for identity in payload['confirmation_ids']:
         record = applicant_salary_review.checked(store.runtime_document(c, context['scope_id'], 'applicant_salary:' + identity), context['scope_id'])
-        if record['confirmation_id'] != identity or record['job_observation_task_id'] != payload['job_observation_task_id']:
-            raise KernelError('SALARY_EVIDENCE_MISMATCH', '薪资确认不属于本次岗位读取。')
+        # A 方案（2026-10-28）：确认按 job_id 通用，不再要求与本次读取是同一个 task。
+        # 仍要求 confirmation_id 对得上（身份 = job + 金额 + 资料版本）。
+        if record['confirmation_id'] not in {identity, applicant_salary_review.legacy_identity(record)}:
+            raise KernelError('SALARY_EVIDENCE_MISMATCH', '薪资确认与本次候选不匹配。')
         fields = {**payload, 'salary_observation_task_id': record['salary_observation_task_id'], 'job_id': record['job']['job_id']}
         job, evidence, profile, plan = salary_review_sources(c, context, fields)
         if (job != record['job'] or evidence['recognized_text'] != record['salary_text'] or evidence['image_sha256'] != record['image_sha256']
@@ -2033,6 +2035,43 @@ def applicant_search_details(payload, context):
                      '批量补读只补职责正文；单条失败已逐条记录，未读到的仍需人工核对。')}
 
 
+def confirmed_salary_by_job(c, context):
+    """已确认薪资的 job_id 索引：{job_id: salary_text}。
+
+    A 方案（2026-10-28 用户裁定）：确认身份 = 岗位 + 金额 + 资料版本，**不绑某次读取**，
+    所以搜索会话可以直接消费它 —— 这样「有 JD 的候选」与「已确认薪资」终于能合到一起。
+
+    保守规则：
+    - 坏记录 / 校验不过 → 跳过（不参与匹配，也不当成"没确认"蒙混）
+    - profile/plan 版本与当前不一致 → 跳过（资料变了，旧确认失效）
+    - 同一 job_id 出现两个不同金额 → 视为歧义，**两条都不用**
+    """
+    rows = c.execute("SELECT kind, revision, content FROM runtime_documents "
+                     "WHERE scope_id=? AND kind LIKE 'applicant_salary:%'",
+                     (context['scope_id'],)).fetchall()
+    plan = store.runtime_document(c, context['scope_id'], 'applicant_plan')
+    profile = store.runtime_document(c, context['scope_id'], 'profile')
+    index, ambiguous = {}, set()
+    for _kind, revision, content in rows:
+        try:
+            data = json.loads(content) if isinstance(content, str) else content
+            record = applicant_salary_review.checked({'revision': revision, 'content': data},
+                                                     context['scope_id'])
+        except (KernelError, TypeError, ValueError, KeyError):
+            continue
+        if (record['profile_revision'] != profile['revision']
+                or record['plan_revision'] != plan['revision']):
+            continue
+        job_id, text = record['job']['job_id'], record['salary_text']
+        if job_id in index and index[job_id] != text:
+            ambiguous.add(job_id)
+            continue
+        index[job_id] = text
+    for job_id in ambiguous:
+        index.pop(job_id, None)
+    return index
+
+
 def applicant_search_get(payload, context):
     """Read the current bounded-search session and its explained candidates."""
     applicant_only(context)
@@ -2043,6 +2082,7 @@ def applicant_search_get(payload, context):
         check_context(c, context['context_token'])
         plan = store.runtime_document(c, context['scope_id'], 'applicant_plan')
         state, _ = _job_search_state(c, context)
+        confirmed_salary = confirmed_salary_by_job(c, context)
     if state is None:
         return {'status': 'not_started', 'state': None, 'candidates': [],
                 'sending_enabled': False, 'automatic_execution': False}
@@ -2051,6 +2091,14 @@ def applicant_search_get(payload, context):
               'account_verified': False, 'sending_enabled': False, 'automatic_execution': False}
     if payload.get('include_candidates', True) and state['jobs']:
         records = applicant_job_search.job_records(state)
+        # 把已确认薪资套进候选（A 方案第二半）：确认按 job_id 通用，跨读取有效。
+        applied = 0
+        for record in records:
+            text = confirmed_salary.get(record['job_id'])
+            if text:
+                record['salary'] = text
+                applied += 1
+        result['salary_confirmed_applied'] = applied
         candidates, counts = [], {'eligible': 0, 'needs_review': 0, 'rejected': 0}
         # applicant_jobs.validate_jobs 单次最多 50 条；采集上限 60，按 50 分批匹配后合并。
         for start in range(0, len(records), 50):

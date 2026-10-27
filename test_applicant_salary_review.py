@@ -13,6 +13,36 @@ import test_applicant_delivery as fixture
 from sandbox import KernelError
 
 
+class ConfirmationIdentityTest(unittest.TestCase):
+    """A 方案的核心语义：确认身份只跟「事实」走，不跟「哪次读取」走。"""
+
+    BASE = {'scope_id': 's' * 64, 'job': {'job_id': 'j1', 'company': '甲'},
+            'salary_text': '13-16K', 'monthly_salary': [13000, 16000],
+            'profile_revision': 1, 'plan_revision': 1,
+            'job_observation_task_id': 'a' * 32,
+            'salary_observation_task_id': 'b' * 32, 'image_sha256': 'c' * 64}
+
+    def identity(self, **changes):
+        import applicant_salary_review as review
+        return review.identity({**self.BASE, **changes})
+
+    def test_identity_ignores_which_read_or_screenshot(self):
+        # 换一次 jobs.read / 重新截一次图，不应改变「这个岗位值多少钱」这个事实
+        self.assertEqual(self.identity(),
+                         self.identity(job_observation_task_id='d' * 32,
+                                       salary_observation_task_id='e' * 32,
+                                       image_sha256='f' * 64))
+
+    def test_identity_tracks_salary_job_and_document_versions(self):
+        for changes, why in (
+                ({'salary_text': '20-30K', 'monthly_salary': [20000, 30000]}, '薪资变了'),
+                ({'job': {'job_id': 'j1', 'company': '乙'}}, '岗位信息变了'),
+                ({'profile_revision': 2}, '资料版本变了'),
+                ({'plan_revision': 2}, '计划版本变了')):
+            self.assertNotEqual(self.identity(), self.identity(**changes),
+                                '%s 时旧确认必须失效' % why)
+
+
 class SalaryConfirmationTest(unittest.TestCase):
     def setUp(self):
         self.f=fixture.ApplicantDeliveryTest();self.f.setUp()
@@ -123,10 +153,21 @@ class SalaryConfirmationTest(unittest.TestCase):
         with self.assertRaises(KernelError) as caught:self.confirm(job_observation_task_id=fake['trace_id'])
         self.assertEqual(caught.exception.code,'OBSERVATION_REQUIRED')
 
-    def test_confirmation_cannot_be_reused_for_a_different_job_read(self):
-        confirmed=self.confirm()['data'];self.jobs=self.observe_jobs()
-        with self.assertRaises(KernelError) as caught:self.preview([confirmed['confirmation_id']])
-        self.assertEqual(caught.exception.code,'SALARY_EVIDENCE_MISMATCH')
+    def test_confirmation_is_reusable_across_job_reads_for_the_same_stable_facts(self):
+        """A 方案（2026-10-28 用户裁定）：确认身份只由稳定事实决定，不绑某次读取。
+
+        原断言「确认不能用于另一次岗位读取」把实现副作用（绑 job_observation_task_id）
+        当成了业务规则，导致搜索会话永远吃不到薪资确认。现在：
+        同岗位 + 同金额 + 同资料版本 → 跨读取可复用；
+        岗位信息 / 资料版本 / 计划版本变化时仍会失效（见 salary_review_sources 的逐项比对）。
+        """
+        confirmed = self.confirm()['data']
+        self.jobs = self.observe_jobs()          # 换一次读取：task_id 已变
+        result = self.preview([confirmed['confirmation_id']])
+        self.assertTrue(result['ok'], result)
+        matched = [c for c in result['data']['candidates']
+                   if c.get('salary_source') == 'explicitly_confirmed_ocr']
+        self.assertTrue(matched, '同岗位同金额的确认应当能用于新的读取')
 
     def test_rollback_preserves_no_confirmation_without_receipt(self):
         with mock.patch.object(runtime_tools,'record_commit',side_effect=KernelError('FIXTURE','fixture')):

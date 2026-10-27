@@ -9,9 +9,25 @@ JOB_FIELDS = ('job_id', 'title', 'company', 'city', 'salary', 'education', 'expe
 BINDING_FIELDS = ('scope_id', 'job_observation_task_id', 'salary_observation_task_id', 'job',
                   'salary_text', 'monthly_salary', 'image_sha256', 'profile_revision', 'plan_revision')
 
+# 2026-10-28（用户裁定 A）：确认的身份只由**稳定事实**决定 —— 哪个岗位、多少钱、哪版资料。
+# 原先把 job_observation_task_id / salary_observation_task_id / image_sha256 也算进 identity，
+# 导致「同一岗位值多少钱」这个事实绑在某次读取上：换一次 jobs.read 或重新截图，旧确认就作废
+# （SALARY_EVIDENCE_MISMATCH），搜索会话永远吃不到薪资确认。绑定应属实现副作用，不是业务事实。
+STABLE_FIELDS = ('scope_id', 'job', 'salary_text', 'monthly_salary',
+                 'profile_revision', 'plan_revision')
+
 
 def identity(binding):
-    return hashlib.sha256(json.dumps(binding, sort_keys=True, ensure_ascii=False, allow_nan=False).encode('utf-8')).hexdigest()
+    stable = {key: binding[key] for key in STABLE_FIELDS}
+    return hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False,
+                                     allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def legacy_identity(binding):
+    """改动前的算法（含两个 task_id 与截图哈希）。只用于让旧记录继续可校验。"""
+    full = {key: binding[key] for key in BINDING_FIELDS}
+    return hashlib.sha256(json.dumps(full, sort_keys=True, ensure_ascii=False,
+                                     allow_nan=False).encode('utf-8')).hexdigest()
 
 
 def checked(document, scope_id):
@@ -24,7 +40,7 @@ def checked(document, scope_id):
         monthly = applicant_jobs.monthly_salary(binding['salary_text'])
         valid = (type(document['revision']) is int and document['revision'] == 1 and set(data) == set(BINDING_FIELDS) | {'confirmation_id', 'confirmed', 'sending_enabled'}
                  and data['scope_id'] == scope_id and data['confirmed'] is True and data['sending_enabled'] is False
-                 and data['confirmation_id'] == identity(binding)
+                 and data['confirmation_id'] in {identity(binding), legacy_identity(binding)}
                  and monthly is not None and list(monthly) == data['monthly_salary']
                  and isinstance(data['monthly_salary'], list) and all(type(v) is int for v in data['monthly_salary'])
                  and all(type(data[k]) is int and data[k] > 0 for k in ('profile_revision', 'plan_revision'))
