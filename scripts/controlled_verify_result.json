@@ -1,0 +1,74 @@
+[
+  {
+    "step": "service",
+    "payload": {
+      "ok": true
+    }
+  },
+  {
+    "step": "page",
+    "payload": {
+      "ok": true,
+      "bytes": 2444
+    }
+  },
+  {
+    "step": "edge",
+    "payload": {
+      "ok": true
+    }
+  },
+  {
+    "step": "open",
+    "payload": {
+      "status": "controlled_page_opened",
+      "url": "http://127.0.0.1:18770/controlled-chat",
+      "browser_session_fingerprint": "8b2de198d2931d9fbe1c7afe3e5df04c03d19ef39e962203e9d2c5382e4a0184",
+      "sending_enabled": false
+    }
+  },
+  {
+    "step": "fill",
+    "payload": {
+      "status": "filled",
+      "focused": true,
+      "length": 21,
+      "sending_enabled": false
+    }
+  },
+  {
+    "step": "observe_before",
+    "payload": {
+      "status": "observed",
+      "count": 0,
+      "last": null,
+      "crashed": false
+    }
+  },
+  {
+    "step": "submit",
+    "payload": {
+      "status": "submitted",
+      "cleared": true,
+      "sending_enabled": false,
+      "delivery_confirmed": false
+    }
+  },
+  {
+    "step": "observe_after",
+    "payload": {
+      "status": "observed",
+      "count": 1,
+      "last": "受控验证：您好，我是受控页面上的测试消息。",
+      "crashed": false
+    }
+  },
+  {
+    "step": "verdict",
+    "payload": {
+      "ok": true,
+      "echo_matches": true,
+      "count_delta": 1
+    }
+  }
+]

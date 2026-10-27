@@ -1,0 +1,15 @@
+{
+  "name": "jobkit-shell",
+  "version": "0.1.0",
+  "description": "jobkit 双端沟通工作台 —— 同源界面与唯一执行内核",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": ["jobkit", "boss", "electron"],
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.4.3"
+  }
+}

@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>jobkit · 沟通工作台</title>
+<style>
+:root{
+ --paper:#F4F1E9;--ink:#202821;--accent:#D5EE75;--white:#FFFEFA;--sage:#E4E8DC;
+ --sans:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;--mono:ui-monospace,"Cascadia Code",Consolas,monospace;
+ --display:72px;--body:16px;--small:14px;
+ --unit:8px;--s1:var(--unit);--s2:calc(var(--unit)*2);--s3:calc(var(--unit)*4);--s4:calc(var(--unit)*8);--half:calc(var(--unit)/2);
+ --hit:44px;--round:var(--s2);--max:1280px;--outline:3px;
+ --fast:160ms;--reveal:360ms;--stagger:75ms;--pulse:1200ms;
+}
+*{box-sizing:border-box} [hidden]{display:none!important}
+html{scroll-behavior:auto;scroll-padding-top:var(--s2)}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:var(--body);line-height:1.65}
+button,input,textarea,select{font:inherit;color:inherit}button,a,input,textarea,select,summary{touch-action:manipulation}
+button,a,summary{ -webkit-tap-highlight-color:transparent}
+button{cursor:pointer}button:disabled{cursor:default;opacity:.65}button,select,input{min-height:var(--hit)}
+a{color:inherit;text-decoration:none}button{border:0;background:transparent}p,h1,h2,h3{margin:0}h2,h3{font-size:var(--body)}
+:focus-visible{outline:var(--outline) solid var(--ink);outline-offset:var(--half)}
+.dark :focus-visible{outline-color:var(--accent)}
+main:focus{outline:none}
+.wrap{max-width:var(--max);margin:auto;padding-inline:var(--s3)}
+.skip{position:fixed;top:var(--s1);left:var(--s1);z-index:30;background:var(--accent);padding:var(--s2);transform:translateY(-180%)}.skip:focus{transform:none}
+.header{display:flex;align-items:center;gap:var(--s3);min-height:calc(var(--unit)*12)}
+.brand{display:flex;align-items:center;gap:var(--s1);font-weight:800;font-size:var(--body);letter-spacing:-.03em;min-height:var(--hit)}
+.brand-mark{height:var(--s3);width:var(--s3);display:grid;place-items:center;background:var(--ink);color:var(--accent);border-radius:var(--s1)}
+.icon{width:calc(var(--unit)*2.5);height:calc(var(--unit)*2.5);fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nav{display:flex;gap:var(--s1);margin-left:auto}.nav a{padding:var(--s1) var(--s2);display:flex;align-items:center;gap:var(--s1);min-height:var(--hit);border-radius:var(--s1);font-size:var(--small)}
+.nav a[aria-current="page"]{background:var(--ink);color:var(--paper)}.nav a:hover{background:var(--sage);color:var(--ink)}
+.role-label{font-size:var(--small);padding-left:var(--s2)}
+.intro{padding-top:var(--s3);padding-bottom:var(--s3)}
+h1{font-size:var(--display);font-weight:650;line-height:1.14;letter-spacing:-.065em;max-width:100%}
+.intro-line{margin-top:var(--s2);display:flex;justify-content:space-between;gap:var(--s2);align-items:center}.meta{font-size:var(--small)}
+.demo-label{display:flex;align-items:center;gap:var(--s1);white-space:nowrap}.dot{display:inline-block;width:var(--s1);height:var(--s1);border-radius:50%;background:currentColor}
+.workbench{display:grid;grid-template-columns:1fr 1fr;background:var(--white);border-radius:var(--round);overflow:hidden;min-height:calc(var(--unit)*57)}
+.case{padding:var(--s3);display:flex;flex-direction:column;gap:var(--s2)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}.identity{display:flex;align-items:center;gap:var(--s2)}
+.avatar{display:grid;place-items:center;flex:none;width:calc(var(--unit)*6);height:calc(var(--unit)*6);background:var(--sage);border-radius:50%;font-weight:700}
+.label{font-size:var(--small);font-weight:650}.number{font-family:var(--mono);font-size:var(--small);white-space:nowrap;flex:none}.identity,.identity>div{min-width:0}
+.message{font-size:var(--body);padding:var(--s2);background:var(--paper);border-radius:0 var(--s2) var(--s2) var(--s2);line-height:1.9}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:var(--s2);margin:0}.facts dt{font-size:var(--small)}.facts dd{margin:var(--half) 0 0;font-weight:650}
+.facts-head{display:flex;align-items:center;gap:var(--s1);margin-bottom:var(--s2)}
+.case-bottom{margin-top:auto;display:flex;justify-content:space-between;align-items:center;gap:var(--s2)}
+.text-button{min-height:var(--hit);padding:var(--s1);margin-inline:calc(var(--s1)*-1);display:inline-flex;align-items:center;justify-content:center;gap:var(--s1);font-size:var(--small);border-radius:var(--s1)}
+.text-button:hover{background:var(--sage)}
+.dark{background:var(--ink);color:var(--paper)}
+.draft{position:relative;padding:var(--s3);display:flex;flex-direction:column;gap:var(--s3)}
+.draft-heading{display:flex;justify-content:space-between;gap:var(--s2);align-items:center}.status{font-size:var(--small);display:flex;align-items:center;gap:var(--s1)}
+.draft-body{flex:1;min-height:calc(var(--unit)*22)}.draft-body p+p{margin-top:var(--s2)}.draft-body blockquote{margin:0;font-size:var(--body);line-height:1.95}
+.draft-foot{display:flex;flex-direction:column;gap:var(--s2)}
+.primary{display:flex;justify-content:space-between;align-items:center;gap:var(--s2);background:var(--accent);color:var(--ink);font-weight:700;min-height:calc(var(--unit)*7);padding:var(--s2) var(--s3);border-radius:var(--s1);width:100%}
+.primary .icon{width:calc(var(--unit)*3);height:calc(var(--unit)*3)}.primary:hover{background:var(--white)}
+.dark .text-button:hover{background:var(--sage);color:var(--ink)}
+.note{font-size:var(--small);display:flex;gap:var(--s1);align-items:flex-start}.note .icon{margin-top:var(--half)}
+.workflow{display:flex;align-items:center;gap:var(--s3);padding:var(--s3) 0}.workflow li{display:flex;gap:var(--s1);align-items:center;list-style:none;font-size:var(--small)}.workflow ol{display:flex;align-items:center;gap:var(--s3);margin:0;padding:0}.workflow .active{font-weight:700}.step-number{font-family:var(--mono)}
+.workflow-note{margin-left:auto;font-size:var(--small)}
+.footer{padding:var(--s2) 0 var(--s3);display:flex;justify-content:space-between;gap:var(--s2);font-size:var(--small)}
+.inline-settings{font-size:var(--small)}summary{cursor:pointer;min-height:var(--hit);display:flex;align-items:center;gap:var(--s1)}summary::after{content:"＋";margin-left:auto}details[open]>summary::after{content:"−"}
+.inline-settings select{width:100%;background:var(--paper);border:0;border-radius:var(--s1);padding:var(--s1)}
+.soft{background:var(--sage)}.state-note{padding:var(--s2);border-radius:var(--s1)}
+.empty-mark{display:inline-flex;background:var(--accent);color:var(--ink);padding:var(--s2);border-radius:50%;margin-bottom:var(--s2)}
+.loading-lines{display:grid;gap:var(--s2);margin-top:var(--s3)}.loading-lines span{display:block;height:var(--s1);background:var(--sage);opacity:.3;transform-origin:left}.loading-lines span:nth-child(2){width:85%}.loading-lines span:nth-child(3){width:63%}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.page-intro{padding:var(--s3) 0}.page-intro p{margin-top:var(--s2)}
+.facts-layout{display:grid;grid-template-columns:1fr 2fr;gap:var(--s3);align-items:start}
+.job-index{padding:var(--s3);background:var(--sage);border-radius:var(--round);position:sticky;top:var(--s2)}.job-index p{margin-top:var(--s2)}
+.document{background:var(--white);padding:var(--s3);border-radius:var(--round)}.document-title{display:flex;gap:var(--s2);align-items:center;margin-bottom:var(--s3)}.document-title>.icon{width:var(--s3);height:var(--s3)}
+.fact-rows{display:grid;gap:var(--s1);margin:0}.fact-row{display:grid;grid-template-columns:calc(var(--unit)*16) 1fr;gap:var(--s2);padding:var(--s2);background:var(--paper);border-radius:var(--s1)}.fact-row:nth-child(even){background:var(--sage)}.fact-row dt{font-size:var(--small)}.fact-row dd{margin:0;font-weight:600;white-space:pre-wrap;overflow-wrap:anywhere}
+.edit-facts{margin-top:var(--s3)}.edit-facts>summary{font-weight:650}.field{display:grid;gap:var(--s1);margin-top:var(--s2)}.field small{font-size:var(--small)}
+textarea,select{background:var(--white);border:2px solid var(--sage);border-radius:var(--s1);padding:var(--s2);width:100%}textarea{resize:vertical;min-height:calc(var(--unit)*22)}
+.drop-zone{margin:var(--s2) 0;display:flex;align-items:center;justify-content:center;gap:var(--s2);padding:var(--s3);width:100%;background:var(--sage);border:2px dashed var(--ink);border-radius:var(--s1)}.drop-zone.is-dragging{background:var(--accent);outline:var(--outline) solid var(--ink);outline-offset:var(--half)}
+.form-message{margin:var(--s2) 0;font-size:var(--small);font-weight:600}.secondary{min-height:var(--hit);padding:var(--s1) var(--s2);border-radius:var(--s1);background:var(--sage);font-weight:600}.secondary:hover{background:var(--accent)}
+.facts-disclaimer{margin-top:var(--s3);font-size:var(--small)}
+.history-summary{display:flex;align-items:center;gap:var(--s3);padding:var(--s3);background:var(--ink);color:var(--paper);border-radius:var(--round)}.history-number{font-family:var(--mono);font-size:var(--display);line-height:1}.history-summary p{margin-top:var(--s1)}
+.records{padding:var(--s3) 0;display:grid;gap:var(--s2)}.record{display:grid;grid-template-columns:calc(var(--unit)*13) 1fr auto;gap:var(--s3);padding:var(--s2) var(--s3);align-items:center;background:var(--white);border-radius:var(--s1)}.record time{font-family:var(--mono);font-size:var(--small)}.record p{font-size:var(--small);margin-top:var(--half)}
+.empty-history{padding:var(--s4) var(--s3);background:var(--white);border-radius:var(--round)}.empty-history p{margin:var(--s2) 0}.empty-history .primary{max-width:calc(var(--unit)*40)}
+.settings-layout{display:grid;grid-template-columns:1fr 1fr;gap:var(--s4)}.settings-form{background:var(--white);border-radius:var(--round);padding:var(--s3)}.settings-form .field:first-child{margin-top:0}.settings-note{padding-top:var(--s3)}.settings-note p{margin:var(--s2) 0}.settings-note .meta{max-width:calc(var(--unit)*50)}
+.trace{margin-top:var(--s3);padding:var(--s2);background:var(--paper);font-family:var(--mono);font-size:var(--small);overflow-wrap:anywhere}.trace p{margin:var(--s1) 0}
+.draft-edit{background:var(--ink);color:var(--paper);border:0;border-radius:0;padding:0;width:100%;min-height:calc(var(--unit)*23);line-height:1.95;resize:vertical;outline-offset:var(--s1)}.draft-edit:focus-visible{outline:2px solid var(--accent)}
+.draft-source{margin-top:var(--s2);font-size:var(--small);padding-top:var(--s2)}.draft-source span{display:block}
+.toast{position:fixed;bottom:var(--s3);left:50%;transform:translateX(-50%);z-index:40;background:var(--ink);color:var(--paper);padding:var(--s2) var(--s3);border:2px solid var(--paper);border-radius:var(--round);display:flex;gap:var(--s2);align-items:center;max-width:calc(100% - var(--s3));width:max-content}.toast button{color:var(--ink);background:var(--accent);padding:var(--s1) var(--s2);border-radius:var(--s1);white-space:nowrap}.toast p{font-size:var(--small)}
+body:not([data-page="today"]) .footer{padding-top:var(--s4)}
+@media(min-width:1100px){.header .brand{min-width:calc(var(--unit)*19)}}
+@media(max-width:1050px){:root{--display:48px}.role-label{display:none}.nav{gap:0}.nav a{padding-inline:var(--s2)}.workbench{grid-template-columns:1fr 1fr}.case,.draft{padding:var(--s3)}.workflow{gap:var(--s2)}.workflow ol{gap:var(--s2)}.workflow-note{max-width:35%}}
+@media(max-width:600px){:root{--display:36px}.wrap{padding-inline:var(--s2)}.header{flex-wrap:wrap;gap:0;min-height:auto;padding-top:var(--s2)}.brand{min-height:var(--hit)}.role-label{display:block;margin-left:auto;font-size:var(--small);padding-left:0}.nav{order:3;width:100%;margin:var(--s1) 0 0;justify-content:space-between;gap:var(--half)}.nav a{flex:1;padding:var(--s1) var(--half);justify-content:center;white-space:nowrap}.nav .icon{display:none}.intro{padding-top:var(--s3);padding-bottom:var(--s2)}h1{line-height:1.25;letter-spacing:-.06em}.intro-line{display:block}.demo-label{margin-top:var(--s1)}.workbench{display:flex;flex-direction:column;border-radius:var(--s2);min-height:0}.case{padding:var(--s2);gap:var(--s2)}.case .facts-area{display:none}.case-bottom{margin-top:0}.draft{padding:var(--s2);gap:var(--s2)}.draft-body{min-height:calc(var(--unit)*17)}.draft-foot{gap:var(--s1)}.action-dock{position:fixed;bottom:0;left:0;right:0;padding:var(--s2);padding-bottom:max(var(--s2),env(safe-area-inset-bottom));background:var(--paper);z-index:10}.action-dock .primary:hover{background:var(--sage)}.workflow{padding:var(--s2) 0;display:block}.workflow ol{justify-content:space-between;gap:var(--s1)}.workflow-note{margin-top:var(--s2);max-width:none}.footer{display:block;padding-bottom:calc(var(--unit)*14)}.footer span{display:block}.inline-settings{margin-top:0}.draft .note{padding-bottom:var(--s1)}}
+@media(max-width:900px){.facts-layout{grid-template-columns:1fr}.job-index{position:static;display:flex;gap:var(--s3);align-items:center}.job-index p{margin-top:0}.settings-layout{gap:var(--s3)}}
+@media(max-width:600px){:root{--display:40px}h1>span{display:block}.facts-layout{gap:var(--s2)}.job-index{display:block;padding:var(--s2)}.job-index p{margin-top:var(--s1)}.document{padding:var(--s2)}.fact-row{grid-template-columns:1fr;gap:var(--s1)}.document-title{margin-bottom:var(--s2)}.settings-layout{display:flex;flex-direction:column;gap:var(--s2)}.settings-form{padding:var(--s2)}.settings-note{padding:var(--s2)}.record{grid-template-columns:1fr auto;gap:var(--s1);padding:var(--s2)}.record time{grid-column:1/-1}.history-summary{padding:var(--s3) var(--s2);gap:var(--s2)}.toast{bottom:calc(var(--unit)*13);padding:var(--s2);width:calc(100% - var(--s3))}.toast p{flex:1}.empty-history{padding:var(--s3) var(--s2)}body:not([data-page="today"]) .footer{padding-bottom:var(--s3)}body:not([data-page="today"]) .toast{bottom:var(--s2)}}
+@media(min-width:601px) and (max-width:900px){.case,.draft{padding:var(--s2)}.row{gap:var(--s1)}.identity{gap:var(--s1)}}
+/* Motion is added after layout: one result reveal, restrained entrances and tactile controls. */
+button,a,summary{transition:transform var(--fast),opacity var(--fast)}
+button:not(:disabled):active,a:active,summary:active{transform:scale(.98)}
+@media(hover:hover){.primary:hover,.secondary:hover{transform:translateY(calc(var(--half)*-.5))}}
+@keyframes appear{from{opacity:0;transform:translateY(var(--s2))}to{opacity:1;transform:none}}
+@keyframes breathe{0%,100%{opacity:.25}50%{opacity:.55}}
+[data-view]:not([hidden]) h1{animation:appear var(--reveal) both}
+.intro-line,.page-intro>p{animation:appear var(--reveal) var(--stagger) both}
+.case,.draft-heading,.draft-body,.facts-layout,.history-summary,.settings-layout{animation:appear var(--reveal) calc(var(--stagger)*2) both}
+.result-reveal{animation:appear var(--reveal) both}
+.loading-lines span{animation:breathe var(--pulse) infinite}.loading-lines span:nth-child(2){animation-delay:var(--stagger)}.loading-lines span:nth-child(3){animation-delay:calc(var(--stagger)*2)}
+.reduce-motion *{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+.reduce-motion button,.reduce-motion a,.reduce-motion summary{transform:none!important}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}button,a,summary{transform:none!important}}
+</style>
+</head>
+<body data-page="today">
+<svg class="sr-only" aria-hidden="true"><defs>
+ <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+ <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+ <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 4h16v16H4zM4 14h5l2 3h2l2-3h5M8 8h8"/></symbol>
+ <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6"/></symbol>
+ <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 10a8 8 0 1 1 1 7M4 5v5h5M12 7v5l3 2"/></symbol>
+ <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6m8 4v6"/></symbol>
+ <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 8h11v13H9zM15 8V3H4v13h5"/></symbol>
+ <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+ <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5"/></symbol>
+</defs></svg>
+<a class="skip" href="#content">跳到当前任务</a>
+<div class="wrap">
+ <header class="header">
+  <a class="brand" href="#today" aria-label="jobkit 今日待办"><span class="brand-mark" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span>jobkit</a>
+  <nav class="nav" aria-label="主导航">
+   <a href="#today" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-inbox"/></svg>今日待办</a>
+   <a href="#facts"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg>岗位资料</a>
+   <a href="#history"><svg class="icon" aria-hidden="true"><use href="#i-history"/></svg>处理记录</a>
+   <a href="#settings"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>设置</a>
+  </nav>
+  <span class="role-label" id="roleLabel">招聘者工作台</span>
+ </header>
+ <main id="content" tabindex="-1">
+  <section id="view-today" aria-labelledby="todayTitle" data-view="today">
+   <div class="intro"><h1 id="todayTitle"><span>把每一次沟通，</span><span>推进到下一步</span></h1><div class="intro-line"><p id="introText">先处理眼前这一条。资料已展开，回复有依据。</p><span class="meta demo-label"><span class="dot" aria-hidden="true"></span>交互演示 · 示例内容</span></div></div>
+   <div class="workbench" data-demo="true">
+    <article class="case" aria-label="当前待办消息">
+     <div class="row"><div class="identity"><span class="avatar" id="avatar">A</span><div><h2 id="person">候选人 A</h2><p class="meta" id="jobName">AI 应用开发工程师 · 广州</p></div></div><span class="number" id="queueIndex">01 / 03</span></div>
+     <p class="message" id="messageText">你好，想了解这个岗位主要做什么？工作地点在哪里，可以先线上沟通吗？</p>
+     <div class="facts-area"><div class="facts-head"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><h3>回复将依据这些资料</h3></div><dl class="facts" id="quickFacts"><div><dt>工作内容</dt><dd>Python · AI 应用开发</dd></div><div><dt>办公地点</dt><dd>广州 · 天河区</dd></div><div><dt>初次沟通</dt><dd>支持线上交流</dd></div><div><dt>资料状态</dt><dd>示例资料，待替换</dd></div></dl></div>
+     <div class="case-bottom"><span class="meta" id="queueHint">还有 2 条示例待办</span><button class="text-button" id="nextButton">查看下一条<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button><button class="text-button" id="archiveButton" hidden>归档此条<svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button><button class="text-button" id="copyAgain" hidden>再复制一次<svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg></button></div>
+     <details class="inline-settings"><summary>更多设置</summary><label for="tone">回复风格</label><select id="tone"><option value="natural">自然、清楚（默认）</option><option value="brief">更简短</option></select></details>
+    </article>
+    <article class="draft dark" aria-labelledby="draftHeading">
+     <div class="draft-heading"><h2 id="draftHeading">你将得到这样的回复</h2><span class="status" id="draftStatus" role="status"><span class="dot" aria-hidden="true"></span>样例预览</span></div>
+     <div class="draft-body" id="draftBody"><blockquote><p>你好，这个岗位主要使用 Python 开发 AI 应用，工作地点在广州天河区。</p><p>可以先线上交流。你方便先发一份简历吗？我们了解后，再沟通具体安排。</p></blockquote></div>
+     <div class="draft-foot"><p class="note" id="draftNote"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg><span>你先核对，再复制到原平台使用。</span></p><div class="action-dock"><button class="primary" id="mainAction"><span>生成回复草稿</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div></div>
+    </article>
+   </div>
+   <div class="workflow"><ol aria-label="处理步骤"><li class="active" id="step1"><span class="step-number">01</span>查看待办</li><li id="step2"><span class="step-number">02</span>核对草稿</li><li id="step3"><span class="step-number">03</span>复制回复</li></ol><p class="workflow-note">当前为本地演示，未连接招聘平台。</p></div>
+  </section>
+  <section id="view-facts" data-view="facts" aria-labelledby="factsTitle" hidden>
+   <div class="page-intro"><h1 id="factsTitle"><span>把岗位说清楚，</span><span>回复才有依据</span></h1><p>每条回复都从这里取用事实。没有写明的内容，留给你来确认。</p></div>
+   <div class="facts-layout" data-demo="true">
+    <aside class="job-index"><div><h2 id="factsJobName">AI 应用开发工程师</h2><p class="meta">当前示例岗位 · 广州</p></div><p class="meta" id="factsOrigin">内置演示资料<br>用于体验，请替换后再使用。</p></aside>
+    <article class="document"><div class="document-title"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg><div><h2>岗位事实清单</h2><p class="meta">不推断薪资，不承诺录用。</p></div></div><dl class="fact-rows" id="factRows"></dl>
+     <details class="edit-facts"><summary>更新岗位资料</summary><p class="meta">粘贴下列格式的资料，或导入 UTF-8 TXT / MD。每行一个字段，单个文件不超过 200 KB。</p><input type="file" id="fileInput" accept=".txt,.md,text/plain,text/markdown" hidden><button type="button" class="drop-zone" id="dropZone"><svg class="icon" aria-hidden="true"><use href="#i-upload"/></svg><span>选择资料文件，或拖到这里</span></button><label class="field" for="factsEditor"><span>核对资料内容</span><textarea id="factsEditor" spellcheck="false"></textarea></label><p class="form-message" id="factsFeedback" role="status"></p><button class="primary" id="saveFacts"><span>使用这些资料</span><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button></details>
+     <p class="facts-disclaimer">修改仅保留在本次页面内。资料不足时，回复会提示人工补充。</p>
+    </article>
+   </div>
+  </section>
+  <section id="view-history" data-view="history" aria-labelledby="historyTitle" hidden>
+   <div class="page-intro"><h1 id="historyTitle"><span>每一次处理，</span><span>都有清楚的去向</span></h1><p>复制、归档、恢复分别记录。复制成功不等于消息已发送。</p></div>
+   <div class="history-summary" data-demo="true"><span class="history-number" id="archivedCount">0</span><div><h2>条示例消息已归档</h2><p class="meta" id="historySummary">记录来自你在当前页面的实际操作。</p></div></div>
+   <div class="records" id="records" data-demo="true" aria-live="polite"></div>
+  </section>
+  <section id="view-settings" data-view="settings" aria-labelledby="settingsTitle" hidden>
+   <div class="page-intro"><h1 id="settingsTitle"><span>把常用设置收好，</span><span>让每一步都可控</span></h1><p>日常使用保持默认。需要的时候，再展开更多设置。</p></div>
+   <div class="settings-layout">
+    <div class="settings-form"><label class="field" for="roleSelect"><span>当前角色</span><select id="roleSelect"><option value="recruiter">招聘者 · 回复候选人</option><option value="seeker">求职者 · 回复招聘方</option></select><small>切换后展示独立的示例待办、资料和记录。</small></label><label class="field" for="modeSelect"><span>界面模式</span><select id="modeSelect"><option value="normal">普通模式（默认）</option><option value="developer">开发者模式</option><option value="auto" disabled>自动运行 · 尚未接入</option></select><small id="modeHint">只显示业务进度和下一步。</small></label>
+     <details class="edit-facts"><summary>更多设置</summary><label class="field" for="scenarioSelect"><span>体验其他状态</span><select id="scenarioSelect"><option value="normal">正常生成草稿</option><option value="error">演示生成失败</option><option value="empty">演示没有待办</option></select><small>选择后回到「今日待办」体验；不会改变已有归档。</small></label><label class="field" for="motionSelect"><span>动态效果</span><select id="motionSelect"><option value="system">跟随系统</option><option value="reduced">减少动态效果</option></select></label></details>
+     <div class="trace" id="devPanel" hidden><h2>本地演示事件</h2><p>以下是界面操作记录，不是 Kernel 执行 trace。</p><div id="devEvents">尚无事件</div></div>
+    </div>
+    <aside class="settings-note"><h2>眼前的任务，始终由你决定。</h2><p>先核对资料与回复，再复制到原平台。已经归档的条目，随时可以从处理记录恢复。</p><p class="meta">本原型使用预设内容演示交互。招聘平台、模型与自动运行尚未连接，刷新页面会清空本次演示。</p><p class="meta">切换角色时，待办、资料与记录分别保留，避免把候选人回复和求职沟通混在一起。</p></aside>
+   </div>
+  </section>
+ </main>
+ <footer class="footer"><span>jobkit · 把精力留给值得认真聊的人。</span><span>示例仅用于体验 · 刷新页面后重置</span></footer>
+</div>
+<div class="toast" id="toast" hidden><p id="toastText" role="status"></p><button id="toastUndo" hidden>撤销</button><button id="toastClose">关闭提示</button></div>
+<p class="sr-only" id="announcer" role="status" aria-live="polite"></p>
+<script>
+'use strict';
+// Display-only fixture. No tools, network, model, credentials or platform automation.
+const $=id=>document.getElementById(id);
+const icon=name=>`<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const escapeHtml=text=>String(text).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const fixture={
+ recruiter:{label:'招聘者工作台',job:'AI 应用开发工程师 · 广州',facts:{'工作内容':'Python · AI 应用开发','办公地点':'广州 · 天河区','初次沟通':'支持线上交流','补充说明':'收到简历后，再沟通具体安排'},items:[
+  {id:'r-a',name:'候选人 A',letter:'A',message:'你好，想了解这个岗位主要做什么？工作地点在哪里，可以先线上沟通吗？',kind:'intro'},
+  {id:'r-b',name:'候选人 B',letter:'B',message:'你好，我对这个岗位有兴趣。需要先发简历吗？接下来的沟通流程是什么？',kind:'resume'},
+  {id:'r-c',name:'候选人 C',letter:'C',message:'请问这个岗位可以居家办公吗？薪资具体是多少？',kind:'unknown'}]},
+ seeker:{label:'求职者工作台',job:'AI 应用开发岗位 · 沟通示例',facts:{'工作内容':'希望了解 AI 应用开发相关职责','办公地点':'希望确认具体办公地址','初次沟通':'可以先在线了解岗位信息','补充说明':'不提供未经本人确认的经历或到岗时间'},items:[
+  {id:'s-a',name:'招聘方 A',letter:'A',message:'你好，你对 AI 应用开发的岗位有兴趣吗？方便进一步沟通吗？',kind:'intro'},
+  {id:'s-b',name:'招聘方 B',letter:'B',message:'请问你的期望薪资是多少？最快什么时候可以到岗？',kind:'unknown'}]}
+};
+const makeState=role=>({archived:new Set(),index:0,phase:'preview',draft:'',drafts:{},facts:{...fixture[role].facts},custom:false,events:[],scenario:'normal',tone:'natural'});
+const states={recruiter:makeState('recruiter'),seeker:makeState('seeker')};
+let role='recruiter',pageName='today',timer=null,operation=0,undoAction=null,toastTimer=null;
+const state=()=>states[role];
+const pending=()=>fixture[role].items.filter(x=>!state().archived.has(x.id));
+const current=()=>pending()[state().index%Math.max(1,pending().length)];
+function announce(text){$('announcer').textContent=text;}
+function log(action,detail,id){state().events.unshift({at:new Date().toISOString(),action,detail,id:id||current()?.id||null});renderHistory();renderTrace();}
+function toast(text,undo){clearTimeout(toastTimer);$('toastText').textContent=text;undoAction=undo||null;$('toastUndo').hidden=!undo;$('toast').hidden=false;toastTimer=setTimeout(closeToast,undo?15000:8000);}
+function closeToast(){clearTimeout(toastTimer);$('toast').hidden=true;undoAction=null;}
+$('toastClose').addEventListener('click',closeToast);
+$('toastUndo').addEventListener('click',()=>{const fn=undoAction;closeToast();if(fn)fn();});
+function draftFor(item){
+ const f=state().facts,brief=state().tone==='brief';
+ if(role==='seeker')return item.kind==='unknown'?'你好，感谢联系。薪资预期和到岗时间我需要确认后再回复。方便先介绍一下岗位职责和办公地点吗？':`你好，感谢联系，我愿意进一步了解这个岗位。${f['初次沟通']}。\n\n方便介绍一下具体工作内容和办公地点吗？`;
+ if(item.kind==='unknown')return '你好，感谢关注。当前资料没有写明远程办公政策和薪资范围，我需要确认后再答复你。';
+ if(item.kind==='resume')return brief?`你好，可以先发一份简历。${f['补充说明']}。`:`你好，感谢关注这个岗位。你可以先发一份简历，${f['初次沟通']}。\n\n${f['补充说明']}。`;
+ return brief?`你好，工作内容是${f['工作内容']}，地点在${f['办公地点']}；${f['初次沟通']}。`:`你好，这个岗位的工作内容是${f['工作内容']}，工作地点在${f['办公地点']}。\n\n${f['初次沟通']}。你方便先发一份简历吗？${f['补充说明']}。`;
+}
+function setAction(label,actionIcon){$('mainAction').innerHTML=`<span>${label}</span>${icon(actionIcon)}`;}
+function renderToday(){
+ const s=state(),item=current(),items=pending();
+ const empty=s.scenario==='empty'||!item;
+ $('roleLabel').textContent=fixture[role].label;
+ $('tone').value=s.tone;
+ $('nextButton').hidden=empty||['ready','copied','loading'].includes(s.phase);
+ $('archiveButton').hidden=empty||s.phase!=='ready';
+ $('copyAgain').hidden=empty||s.phase!=='copied';
+ $('tone').disabled=s.phase==='loading';
+ $('nextButton').disabled=items.length<2;
+ const details=document.querySelector('.inline-settings');details.hidden=empty;
+ $('step1').classList.toggle('active',!['ready','copied'].includes(s.phase));$('step2').classList.toggle('active',s.phase==='ready');$('step3').classList.toggle('active',s.phase==='copied');
+ $('queueIndex').textContent=empty?'00 / 00':`${String(s.index%items.length+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}`;
+ $('person').textContent=empty?'待办已清空':item.name;$('avatar').textContent=empty?'✓':item.letter;
+ $('jobName').textContent=fixture[role].job;
+ $('messageText').textContent=empty?'当前没有需要处理的示例消息。已有处理记录仍然保留。':item.message;
+ $('queueHint').textContent=empty?'可以随时恢复归档':`还有 ${Math.max(0,items.length-1)} 条示例待办`;
+ $('quickFacts').innerHTML=Object.entries(s.facts).slice(0,3).map(([key,value])=>`<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')+'<div><dt>资料状态</dt><dd>'+(s.custom?'本次已更新':'示例资料，待替换')+'</dd></div>';
+ if(empty){$('draftHeading').textContent='这一轮，可以先告一段落';$('draftStatus').textContent='暂无待办';$('draftBody').innerHTML=`<span class="empty-mark">${icon('check')}</span><p>每一条归档都能找回来。</p><p>到处理记录恢复条目，即可继续体验。</p>`;$('draftNote').innerHTML=icon('history')+'<span>这里只记录本次演示，不代表平台消息状态。</span>';setAction('查看处理记录','history');return;}
+ $('draftNote').innerHTML=icon('check')+'<span>你先核对，再复制到原平台使用。</span>';
+ if(s.phase==='loading'){$('draftHeading').textContent='正在准备回复草稿';$('draftStatus').textContent='正在核对岗位资料…';$('draftBody').innerHTML='<p>正在把原始问题与岗位资料逐项核对。</p><p class="meta">你可以随时取消，本次操作不会发送消息。</p><div class="loading-lines" aria-hidden="true"><span></span><span></span><span></span></div>';setAction('取消生成','stop');}
+ else if(s.phase==='error'){$('draftHeading').textContent='草稿还没有准备好';$('draftStatus').textContent='需要重试';$('draftBody').innerHTML='<p>本次演示模拟了生成失败。你的原始消息与资料都已保留。</p><p>点击「重新生成草稿」再试一次。</p>';$('draftNote').innerHTML=icon('history')+'<span>没有草稿被复制，也没有消息被发送。</span>';setAction('重新生成草稿','arrow');}
+ else if(['ready','copied'].includes(s.phase)){$('draftHeading').textContent=s.phase==='copied'?'已复制，等待你在原平台发送':'核对后，这段回复就能用';$('draftStatus').textContent=s.phase==='copied'?'已复制 · 未发送':'草稿已就绪';$('draftBody').innerHTML='<label class="sr-only" for="draftEditor">回复草稿，可直接编辑</label><textarea id="draftEditor" class="draft-edit" spellcheck="false"></textarea><p class="meta draft-source">你可以直接修改措辞。事实不明确的部分，先向相关人员确认。</p>';$('draftEditor').value=s.draft;$('draftEditor').addEventListener('input',()=>{s.draft=$('draftEditor').value;if(s.phase==='copied'){s.phase='ready';$('draftHeading').textContent='内容已修改，请重新复制';$('draftStatus').textContent='修改后未复制';setAction('复制到剪贴板','copy');$('copyAgain').hidden=true;$('archiveButton').hidden=false;}$('step2').classList.toggle('active',s.phase==='ready');$('step3').classList.toggle('active',s.phase==='copied');});setAction(s.phase==='copied'?'归档并看下一条':'复制到剪贴板',s.phase==='copied'?'arrow':'copy');}
+ else{$('draftHeading').textContent='你将得到这样的回复';$('draftStatus').textContent='样例预览';$('draftBody').innerHTML='<blockquote>'+draftFor(item).split('\n\n').map(p=>'<p>'+escapeHtml(p)+'</p>').join('')+'</blockquote>';setAction('生成回复草稿','arrow');}
+}
+function cancelGeneration(reason='已取消生成，原始消息已保留。'){
+ if(state().phase!=='loading')return;
+ clearTimeout(timer);operation++;state().phase='preview';log('取消生成',reason);renderToday();announce(reason);
+}
+function generate(){
+ const s=state(),item=current();if(!item)return;
+ const wasError=s.phase==='error';s.phase='loading';renderToday();announce('正在核对资料，可取消生成。');
+ const ticket=++operation,owner=role;
+ timer=setTimeout(()=>{
+  if(ticket!==operation||owner!==role)return;
+  if(s.scenario==='error'&&!wasError){s.phase='error';log('生成失败','演示故障；内容已保留',item.id);renderToday();announce('生成失败，点击重新生成草稿重试。');return;}
+  $('draftStatus').textContent='正在整理回复…';announce('资料已核对，正在整理回复。');
+  timer=setTimeout(()=>{if(ticket!==operation||owner!==role)return;s.phase='ready';s.draft=draftFor(item);log('生成草稿','基于当前演示资料，等待人工核对',item.id);renderToday();document.querySelector('.draft-body').classList.remove('result-reveal');void document.querySelector('.draft-body').offsetWidth;document.querySelector('.draft-body').classList.add('result-reveal');if(pageName==='today'&&matchMedia('(max-width:600px)').matches)document.querySelector('.draft').scrollIntoView({block:'start'});announce('草稿已生成。可直接编辑，然后复制到剪贴板。');},650);
+ },650);
+}
+async function copyDraft(){
+ const s=state(),item=current(),text=s.draft,owner=role;if(!text.trim()){announce('请先填写回复内容，再复制。');toast('请先填写回复内容，再复制。');$('draftEditor')?.focus();return;}
+ $('draftStatus').textContent='正在复制…';['mainAction','copyAgain','archiveButton'].forEach(id=>$(id).disabled=true);
+ try{if(!navigator.clipboard?.writeText)throw new Error('clipboard unavailable');await navigator.clipboard.writeText(text);if(owner!==role||current()?.id!==item.id)return;if(s.draft!==text){$('draftStatus').textContent='内容已修改，请重新复制';toast('已复制修改前的文字，请重新复制最新草稿。');return;}s.phase='copied';log('复制草稿','已写入剪贴板；未发送至平台',item.id);renderToday();toast('已复制到剪贴板。请到原平台粘贴并发送。');}
+ catch(error){if(owner!==role||current()?.id!==item.id)return;s.phase='ready';renderToday();$('draftEditor').focus();$('draftEditor').select();$('draftStatus').textContent='请手动复制';$('draftNote').innerHTML=icon('copy')+'<span>浏览器未允许自动复制。草稿已选中，请按 Ctrl+C；手机请长按选中文字复制。</span>';log('复制未完成','浏览器未提供剪贴板权限，请手动复制',item.id);announce('自动复制未完成，草稿已选中，请手动复制。');}
+ finally{['mainAction','copyAgain','archiveButton'].forEach(id=>$(id).disabled=false);}
+}
+function archiveCurrent(){
+ const s=state(),item=current(),owner=role;if(!item)return;
+ s.drafts[item.id]=s.draft;s.archived.add(item.id);log('归档消息',item.name+' · 可从处理记录恢复',item.id);s.index=0;s.phase='preview';s.draft='';renderToday();renderHistory();toast('已归档 '+item.name,()=>restore(item.id,owner));
+}
+function restore(id,owner=role){const s=states[owner];if(!s.archived.has(id))return;s.archived.delete(id);if(owner===role){cancelGeneration('恢复归档前，已取消当前生成。');s.index=pending().findIndex(x=>x.id===id);s.phase=s.drafts[id]?'ready':'preview';s.draft=s.drafts[id]||'';log('恢复消息','条目已回到待办队列',id);renderToday();renderHistory();}else{s.events.unshift({at:new Date().toISOString(),action:'恢复消息',detail:'条目已回到待办队列',id});}announce('归档已恢复。');toast('已恢复到'+fixture[owner].label+'的待办。');}
+$('mainAction').addEventListener('click',()=>{const s=state();if(s.scenario==='empty'||!current()){location.hash='history';return;}if(s.phase==='loading'){cancelGeneration();return;}if(s.phase==='ready'){copyDraft();return;}if(s.phase==='copied'){archiveCurrent();return;}generate();});
+$('nextButton').addEventListener('click',()=>{const s=state();s.index=(s.index+1)%pending().length;s.phase='preview';renderToday();announce('已切换到'+current().name);});
+$('archiveButton').addEventListener('click',archiveCurrent);$('copyAgain').addEventListener('click',copyDraft);
+$('tone').addEventListener('change',()=>{state().tone=$('tone').value;state().phase='preview';renderToday();announce('回复风格已更新，请重新生成草稿。');});
+function renderFacts(){const s=state();$('factRows').innerHTML=Object.entries(s.facts).map(([k,v])=>`<div class="fact-row"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join('');$('factsEditor').value=Object.entries(s.facts).map(([k,v])=>k+'：'+v).join('\n');$('factsOrigin').textContent=s.custom?'本次页面内已更新的资料':'内置演示资料 · 用于体验，请替换后再使用。';$('factsJobName').textContent=role==='recruiter'?'AI 应用开发工程师':'求职沟通资料';}
+function renderHistory(){const s=state();$('archivedCount').textContent=s.archived.size;$('historySummary').textContent=`${pending().length} 条待办 · ${s.events.length} 次本地操作 · 未连接平台`;
+ if(!s.events.length){$('records').innerHTML='<div class="empty-history"><h2>这里还没有处理记录</h2><p>先生成一份回复草稿，操作记录就会出现在这里。</p><a class="primary" href="#today">回到今日待办'+icon('arrow')+'</a></div>';return;}
+ const offered=new Set();$('records').innerHTML=s.events.map(e=>{const canRestore=s.archived.has(e.id)&&!offered.has(e.id);if(canRestore)offered.add(e.id);return `<article class="record"><time datetime="${e.at}">${new Date(e.at).toLocaleTimeString('zh-CN',{hour12:false,timeZone:'Asia/Shanghai'})}</time><div><h2>${escapeHtml(e.action)}</h2><p>${escapeHtml(e.detail)}</p></div>${canRestore?'<button class="secondary" data-restore="'+e.id+'">恢复到待办</button>':'<span class="meta">已记录</span>'}</article>`;}).join('');}
+$('records').addEventListener('click',e=>{const b=e.target.closest('[data-restore]');if(b)restore(b.dataset.restore);});
+function renderTrace(){$('devEvents').replaceChildren();state().events.slice(0,12).forEach(e=>{const p=document.createElement('p');p.textContent=e.at+' · '+e.action+' · '+e.detail;$('devEvents').append(p);});if(!state().events.length)$('devEvents').textContent='尚无事件';}
+function route(){const requested=location.hash.slice(1);pageName=['today','facts','history','settings'].includes(requested)?requested:'today';document.body.dataset.page=pageName;document.querySelectorAll('[data-view]').forEach(el=>el.hidden=el.dataset.view!==pageName);document.querySelectorAll('.nav a').forEach(a=>{if(a.hash==='#'+pageName)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current');});renderHistory();window.scrollTo(0,0);$('content').focus({preventScroll:true});}
+window.addEventListener('hashchange',route);
+$('roleSelect').addEventListener('change',()=>{cancelGeneration('切换角色前已取消当前生成。');closeToast();role=$('roleSelect').value;$('scenarioSelect').value=state().scenario;$('factsFeedback').textContent='';renderToday();renderFacts();renderHistory();renderTrace();announce('已切换到'+fixture[role].label+'，演示资料与记录独立。');});
+$('modeSelect').addEventListener('change',()=>{const dev=$('modeSelect').value==='developer';$('devPanel').hidden=!dev;$('modeHint').textContent=dev?'下方展开本地演示事件。正式执行 trace 尚未接入。':'只显示业务进度和下一步。';announce(dev?'开发者模式已开启。':'已回到普通模式。');});
+$('scenarioSelect').addEventListener('change',()=>{cancelGeneration();state().scenario=$('scenarioSelect').value;state().phase='preview';renderToday();announce('演示状态已更新，回到今日待办即可体验。');});
+$('motionSelect').addEventListener('change',()=>{document.body.classList.toggle('reduce-motion',$('motionSelect').value==='reduced');announce('动态效果偏好已更新。');});
+async function readFile(file){if(!file)return;if(!/\.(txt|md)$/i.test(file.name)){$('factsFeedback').textContent='请改用 UTF-8 TXT 或 MD 文件，或直接粘贴可选择的文字。';return;}if(file.size>200*1024){$('factsFeedback').textContent='请将资料精简到 200 KB 以内，再选择文件。';return;}
+ const owner=role;$('factsFeedback').textContent='正在读取本地文本…';try{const text=await file.text();if(role!==owner){announce('角色已切换，未载入上一角色的文件。');return;}if(text.includes('\uFFFD')){$('factsFeedback').textContent='请将文件另存为 UTF-8 编码后重新导入。';return;}$('factsEditor').value=text;$('factsFeedback').textContent='已读取 '+file.name+'。核对后点击「使用这些资料」。';log('读取本地资料','尚未应用，等待核对');}catch(error){$('factsFeedback').textContent='文件未能读取，请重新选择文件，或直接粘贴文字。';}}
+$('dropZone').addEventListener('click',()=>$('fileInput').click());$('fileInput').addEventListener('change',()=>{readFile($('fileInput').files[0]);$('fileInput').value='';});
+['dragenter','dragover'].forEach(type=>$('dropZone').addEventListener(type,e=>{e.preventDefault();$('dropZone').classList.add('is-dragging');}));
+['dragleave','drop'].forEach(type=>$('dropZone').addEventListener(type,e=>{e.preventDefault();$('dropZone').classList.remove('is-dragging');if(type==='drop')readFile(e.dataTransfer.files[0]);}));
+$('saveFacts').addEventListener('click',()=>{
+ const text=$('factsEditor').value,keys=['工作内容','办公地点','初次沟通','补充说明'],parsed={};
+ for(const line of text.split(/\r?\n/)){const m=line.match(/^\s*(工作内容|办公地点|初次沟通|补充说明)\s*[:：]\s*(.+)$/);if(m)parsed[m[1]]=m[2].trim().replace(/[。；;]+$/,'');}
+ const missing=keys.filter(k=>!parsed[k]);if(missing.length){$('factsFeedback').textContent='请补上这些字段，每行使用“字段：内容”：'+missing.join('、')+'。';return;}
+ if(Object.values(parsed).some(v=>v.length>160)){$('factsFeedback').textContent='请将每个字段精简到 160 字以内，方便核对与生成回复。';return;}
+ const owner=role,previous={...state().facts},wasCustom=state().custom;
+ cancelGeneration('资料更新，已取消旧资料对应的生成。');state().facts=parsed;state().custom=true;state().phase='preview';state().draft='';state().drafts={};log('更新资料','当前角色资料已更新，草稿需要重新生成');renderFacts();renderToday();$('factsFeedback').textContent='资料已更新。回到今日待办，即可按新资料生成草稿。';announce('资料已更新。');
+ toast('岗位资料已更新。',()=>{const s=states[owner];if(role===owner)cancelGeneration('资料已撤销更新，取消当前生成。');s.facts=previous;s.custom=wasCustom;s.phase='preview';s.draft='';s.drafts={};if(role===owner){log('撤销资料更新','已恢复更新前的资料');renderFacts();renderToday();$('factsFeedback').textContent='已恢复更新前的资料。';}else{s.events.unshift({at:new Date().toISOString(),action:'撤销资料更新',detail:'已恢复更新前的资料',id:null});}toast('已恢复更新前的资料。');});
+});
+renderToday();renderFacts();renderHistory();route();
+</script>
+</body>
+</html>

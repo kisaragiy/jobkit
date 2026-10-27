@@ -1,0 +1,46 @@
+# 数据与运行时产物
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+collect_*.json
+collect_*.txt
+session.enc
+# data/ 里是本机运行时数据，但 living_cost.json 是代码依赖
+# （可重建的版本化数据快照），必须进 git —— 所以用 data/* + 反忽略，
+# 不能写 data/（父目录被忽略时其下文件加 ! 也无效）
+data/*
+!data/living_cost.json
+pace_state.json
+.browser_profile/
+.browser_profile.bak/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# 前端构建/截图
+web/node_modules/
+*.png
+!assets/*.png
+
+# 临时
+tmp/
+.jobkit-task-locks/
+.jobkit-backups/
+.jobkit-browsers/
+*.log
+# 投递/登录的重定向输出（2026-10-21 跑投递时产生，之前没拦住）
+apply_log.txt
+apply_err.txt
+login_log*.txt
+login_err*.txt
+
+# Electron shell 依赖
+shell/node_modules/
+chat_watch_state.json
+followup_state.json
+stack_profile.json
+reply_profile.json

@@ -1,0 +1,118 @@
+[
+  {
+    "step": "service",
+    "payload": {
+      "ok": true
+    }
+  },
+  {
+    "step": "edge",
+    "payload": {
+      "ok": true
+    }
+  },
+  {
+    "step": "scenario",
+    "payload": {
+      "name": "normal",
+      "expected": "observed_reply",
+      "state": "observed_reply",
+      "ok": true,
+      "target": "8982949DCB0D8D61864B814A9D71E50C",
+      "delivery_confirmed": false,
+      "retryable": false,
+      "needs_human": false,
+      "authorization_status": "exhausted"
+    }
+  },
+  {
+    "step": "scenario",
+    "payload": {
+      "name": "no-echo",
+      "expected": "submitted_unverified",
+      "state": "submitted_unverified",
+      "ok": true,
+      "target": "15601F30D03E1FA34A90FA41AEEE3F48",
+      "delivery_confirmed": false,
+      "retryable": false,
+      "needs_human": false,
+      "authorization_status": "exhausted"
+    }
+  },
+  {
+    "step": "scenario",
+    "payload": {
+      "name": "crash",
+      "expected": "outcome_unknown",
+      "state": "outcome_unknown",
+      "ok": true,
+      "target": "58C2B75FC9D0D1104D312FA187B56E25",
+      "delivery_confirmed": false,
+      "retryable": false,
+      "needs_human": true,
+      "authorization_status": "exhausted"
+    }
+  },
+  {
+    "step": "scenario",
+    "payload": {
+      "name": "history",
+      "expected": "observed_reply",
+      "state": "observed_reply",
+      "ok": true,
+      "target": "3E8DFD687317C63053CE239EC8DA3783",
+      "delivery_confirmed": false,
+      "retryable": false,
+      "needs_human": false,
+      "authorization_status": "exhausted"
+    }
+  },
+  {
+    "step": "scenario",
+    "payload": {
+      "name": "wrong-target",
+      "expected": "reject:CHANNEL_TARGET_CHANGED",
+      "rejected_with": "CHANNEL_TARGET_CHANGED",
+      "ok": true,
+      "target": "FF1F5A83653BD2820FA9664BC90036F2"
+    }
+  },
+  {
+    "step": "summary",
+    "payload": {
+      "all_ok": true,
+      "outcomes": [
+        {
+          "scenario": "normal",
+          "expected": "observed_reply",
+          "state": "observed_reply",
+          "ok": true
+        },
+        {
+          "scenario": "no-echo",
+          "expected": "submitted_unverified",
+          "state": "submitted_unverified",
+          "ok": true
+        },
+        {
+          "scenario": "crash",
+          "expected": "outcome_unknown",
+          "state": "outcome_unknown",
+          "ok": true
+        },
+        {
+          "scenario": "history",
+          "expected": "observed_reply",
+          "state": "observed_reply",
+          "ok": true
+        },
+        {
+          "scenario": "wrong-target",
+          "expected": "reject:CHANNEL_TARGET_CHANGED",
+          "state": "rejected:CHANNEL_TARGET_CHANGED",
+          "ok": true
+        }
+      ]
+    }
+  }
+]

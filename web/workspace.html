@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jobkit · 沟通工作台</title>
+<style>
+:root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#202821;background:#f4f1e9;font-size:16px}
+*{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}button,input,select{min-height:44px}
+button{cursor:pointer;border:1px solid #202821;border-radius:8px;padding:10px 18px;background:#fffefa;color:#202821}
+button.primary{background:#d5ee75;font-weight:650}button:disabled{cursor:not-allowed;opacity:.6}
+input,select,textarea{width:100%;border:1px solid #87927e;border-radius:8px;background:#fffefa;padding:10px;color:#202821}
+textarea{min-height:120px;resize:vertical}label{display:grid;gap:8px;margin:16px 0}
+#fields textarea{min-height:64px}
+header{border-bottom:1px solid #b5bdab;padding:24px 32px;display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+header strong{font-size:24px}.badge{background:#e4e8dc;border-radius:8px;padding:8px 16px}
+main{max-width:1280px;margin:auto;padding:32px}h1{font-size:clamp(32px,5vw,56px);line-height:1.2;margin:0 0 16px}
+h2{font-size:24px;margin-top:0}p{line-height:1.65}small,.hint{font-size:14px;color:#485642;line-height:1.65}
+.layout{display:grid;grid-template-columns:1fr 1.25fr;gap:32px;margin-top:32px}.panel{padding:24px;background:#fffefa;border:1px solid #b5bdab;border-radius:12px}
+.reply{background:#202821;color:#fffefa;white-space:pre-wrap;min-height:160px;padding:24px;border-radius:8px;line-height:1.8;overflow-wrap:anywhere}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:center}.row>label{flex:1;min-width:160px}.actions{margin-top:16px;display:flex;gap:16px;flex-wrap:wrap}
+#notice{min-height:28px;margin-top:16px}#notice[data-error=true]{color:#9c2f19}.task{padding:16px 0;border-bottom:1px solid #d1d5c8}
+.alarm{border:2px solid #9c2f19;background:#fbeee9;color:#202821;border-radius:8px;padding:16px;margin:16px 0}
+.alarm strong{display:block;font-size:17px;margin-bottom:8px;color:#9c2f19}.alarm p{margin:0;line-height:1.65}
+.task small{display:block}.task button{margin:8px 8px 0 0}details{margin-top:32px}summary{cursor:pointer;min-height:44px}
+.task .reply{min-height:0;padding:16px}
+.reply.stale{background:#e4e8dc;color:#485642;border:1px solid #b5bdab}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #556c19;outline-offset:3px}
+@media(max-width:760px){header,main{padding:16px}.layout{grid-template-columns:1fr;gap:16px}.panel{padding:16px}h1{font-size:32px}}
+</style></head>
+<body>
+<header><strong>jobkit</strong><span id="identity" class="badge">正在读取当前身份…</span><button id="reload">重新加载工作区</button></header>
+<main>
+<h1>把重复的问题，交给有依据的草稿。</h1>
+<p>先核对资料，再粘贴消息。当前提供本地草稿与复制功能，尚未连接 BOSS 自动读取或发送。</p>
+<details><summary>切换招聘者 / 求职者工作区</summary>
+<div class="row"><label>使用身份<select id="role"><option value="recruiter">招聘者</option><option value="applicant">求职者</option></select></label>
+<label>企业或个人分组<input id="organization" maxlength="128" placeholder="例如：某某公司；个人可填 local"></label>
+<label>账号标识<input id="account" maxlength="128" placeholder="自定义名称，请勿输入密码"></label></div>
+<p class="hint">标识用于区分本地资料，不代表已验证平台账号。切换会清空未保存输入，并停止旧工作区的待执行任务。</p>
+<button id="switch">切换工作区</button></details>
+<div id="notice" role="status" aria-live="polite"></div>
+<details id="applicantPlanPanel" hidden><summary>求职目标与自动沟通方案</summary>
+<p class="hint">保存用于核对匹配范围。当前浏览器连接与发送验证尚未完成，保存不会启动自动打招呼或回复。</p>
+<button id="checkApplicantChannel" type="button">检查求职浏览器连接</button><p id="applicantChannelStatus" class="hint" role="status">尚未检查浏览器连接。</p>
+<button id="readApplicantIdentity" type="button">核对求职账号</button><button id="checkApplicantBinding" type="button">检查已关联会话</button>
+<p id="browserBindingStatus" class="hint" role="status">关联专用浏览器会话后可读取沟通列表；不会开启发送。</p>
+<label id="browserBindingLabel" hidden><span><input id="browserBindingConfirmed" type="checkbox" style="width:auto;min-height:auto"> 我确认页面显示的是本人的求职账号</span></label>
+<button id="saveBrowserBinding" type="button" disabled>关联专用会话</button><button id="readApplicantInbox" type="button">读取会话预览</button>
+<p id="inboxStatus" class="hint" role="status">预览不等于完整消息，当前不能据此自动回复。</p><div id="inboxRows"></div>
+<button id="readSelectedMessages" type="button">读取 BOSS 当前选中会话的消息</button><p id="selectedMessagesStatus" class="hint" role="status">请先在 BOSS 沟通页选择会话。这里只读取，不发送。</p><div id="selectedMessages"></div>
+<p id="observedReplyStatus" class="hint" role="status">读取消息后，可按已确认本人资料准备本地回复草稿；不会发送。</p><div id="observedReplyText" class="reply" hidden></div>
+<button id="readApplicantJobs" type="button">读取当前岗位并核对</button><p id="applicantJobsStatus" class="hint" role="status">只读取专用浏览器当前岗位页，不会发送招呼。</p><div id="applicantJobs"></div>
+<button id="reviewApplicantSalaries" type="button">读取并核对岗位薪资</button><p id="salaryReviewStatus" class="hint" role="status">识别金额需对照 BOSS 页面逐条确认；不会发送消息。</p><div id="salaryReviews"></div>
+<form id="applicantPlanForm"><label>岗位关键词（逗号分隔）<input id="planKeywords" maxlength="500"></label>
+<div class="row"><label>优先城市（按顺序）<input id="planPrimaryCities" maxlength="200"></label><label>其次城市（按顺序）<input id="planSecondaryCities" maxlength="200"></label></div>
+<div class="row"><label>最低税前月薪（元）<input id="planSalary" type="number" min="0" max="200000" step="100"></label><label>每天最多打招呼（条）<input id="planGreetings" type="number" min="1" max="1000"></label><label>每天最多回复（0 表示不设日总量上限）<input id="planReplies" type="number" min="0" max="100000"></label></div>
+<label>不考虑的岗位或公司词语（选填，逗号分隔）<input id="planExcluded" maxlength="1200"></label>
+<label>已确认的招呼语模板<textarea id="planGreeting" maxlength="500"></textarea></label>
+<p class="hint">可用 {job_title}、{company}、{city}；引用本人资料可用 {education}、{experience}、{skills}、{project_summary}。缺少依据时转人工，不自动补写。数量设置不保证平台可用额度；重复消息、账号异常和平台验证仍会停止操作。</p>
+<label><span><input id="planConfirmed" type="checkbox" style="width:auto;min-height:auto"> 我已核对求职范围、数量和招呼语</span></label><button id="saveApplicantPlan" class="primary">保存求职方案</button><p id="applicantPlanStatus" class="hint" role="status">尚未读取方案。</p></form></details>
+<details id="sendLoopPanel" hidden><summary>人工回复闭环：核对 → 取待发卡 → 自报 → 回读</summary>
+<p class="hint">这条链路只在本机记录，不会向 BOSS 写入任何内容。取到待发卡后由你复制到 BOSS 原生页面自己发送，再回来登记结果；「已自报」不等于平台送达。</p>
+<section class="panel"><h3>① 消息观察起点</h3>
+<p id="windowStatus" class="hint" role="status">尚未读取观察起点。</p>
+<div class="actions"><button id="refreshWindow" type="button">读取观察起点</button><button id="startWindow" type="button" disabled>用最近一次读取建立或重建起点</button><button id="advanceWindow" type="button" disabled>推进观察（有新消息时）</button></div>
+<p id="windowDetail" class="hint"></p></section>
+<section class="panel"><h3>② 当前草稿的核对与预占</h3>
+<p id="loopDraftStatus" class="hint" role="status">先在上方读取会话并准备回复草稿；这里只处理那份草稿。</p>
+<label id="loopConfirmLabel" hidden><span><input id="loopConfirmed" type="checkbox" style="width:auto;min-height:auto"> 我已核对发送对象、正文内容和当前会话</span></label>
+<div id="loopSteps"></div><div id="loopCard"></div>
+<p id="loopStatus" class="hint" role="status" aria-live="polite"></p>
+<p id="loopDev" class="hint" hidden></p></section>
+<section class="panel"><h3>③ 交接队列</h3>
+<p class="hint">列出本工作区已预占、尚未取卡的记录。不可交接的项也照样显示原因，不会被隐藏成空队列。</p>
+<div class="actions"><button id="refreshQueue" type="button">刷新队列</button><button id="handoffQueue" type="button" disabled>为选中项批量取卡</button></div>
+<p id="queueStatus" class="hint" role="status">尚未读取队列。</p>
+<div id="queueItems"></div><div id="queueCards"></div></section>
+<section class="panel"><h3>④ 结果归因（本机账本，不是平台送达率）</h3>
+<div class="actions"><button id="refreshStats" type="button">读取统计</button></div>
+<p id="statsStatus" class="hint" role="status">尚未读取统计。</p><div id="statsBody"></div></section>
+<section class="panel"><h3>⑤ 发送结果核对（有待核对记录时才需要动手）</h3>
+<p class="hint">这里只核对「点过发送但还没确认结果」的记录。核对不会重发任何消息，也不能让系统判断对方看到没有；未核对完的记录会挡住后续真实发送。</p>
+<div id="capacityAlarm" role="alert" hidden></div>
+<div class="actions"><button id="refreshOutcome" type="button">读取待核对记录</button></div>
+<p id="outcomeStatus" class="hint" role="status" aria-live="polite">尚未读取发送记录。</p>
+<div id="outcomeList"></div></section>
+<section class="panel"><h3>⑥ 暂停自动回复</h3>
+<p class="hint">暂停只停自动回复，招呼照发；也不会阻止你自己把草稿填进输入框或手工发送。换工作区不能绕过暂停。</p>
+<div class="actions"><button id="refreshRunState" type="button">读取运行开关</button><button id="pauseReply" type="button">暂停自动回复</button><button id="resumeReply" type="button" disabled>恢复自动回复</button></div>
+<p id="runStateStatus" class="hint" role="status" aria-live="polite">尚未读取运行开关。</p></section>
+</details>
+<details id="jobSearchPanel" hidden><summary>有界岗位搜索（只读）</summary>
+<p class="hint">采集结果不等于已打招呼；这里只做只读核对，发送仍需你在平台上手动完成。</p>
+<p class="hint">数据来自本机浏览器读取，未验证平台账号身份。采集由本机命令行驱动，本面板不会启动、推进或停止采集。</p>
+<button id="jobSearchRefresh" type="button">刷新</button>
+<p id="jobSearchStatus" role="status" aria-live="polite">还没有搜索记录</p>
+<p id="jobSearchCounts" class="hint"></p>
+<h3>组合进度</h3><ul id="jobSearchCombos"></ul>
+<div id="jobSearchNavigation" hidden><p>需要在命令行重新导航到下一个组合</p><p class="hint">在项目目录的 Git Bash 中手动执行；复制不会运行命令。</p><pre id="jobSearchCommand"></pre><button id="jobSearchCopy" type="button">复制命令</button></div>
+<h3>候选核对</h3><p id="jobSearchEmpty" class="hint"></p>
+<div style="overflow-x:auto"><table style="width:100%;text-align:left"><caption>采集候选（非发送记录）</caption><thead><tr><th scope="col">判定</th><th scope="col">岗位编号</th><th scope="col">职位</th><th scope="col">公司</th><th scope="col">城市</th><th scope="col">薪资</th><th scope="col">理由</th><th scope="col">待核对项</th></tr></thead><tbody id="jobSearchCandidates"></tbody></table></div>
+<details id="jobSearchDev"><summary>搜索开发者信息</summary><pre id="jobSearchDebug"></pre></details>
+</details>
+<details id="batchPanel"><summary>批量录入待回消息（手动）</summary><form id="batchForm"><p class="hint">每行一条，格式：会话备注 | 对方原话。用候选人 A 等内部备注即可。每批最多 50 条；重复文字不会自动合并为同一条消息。</p><label>待回消息清单<textarea id="batchMessages" maxlength="50000" placeholder="候选人 A | 请问工作地点在哪里？&#10;候选人 B | 薪资范围是多少？"></textarea></label><button id="importBatch" class="primary">录入待处理清单</button></form></details>
+<div class="layout">
+<section class="panel"><h2 id="documentTitle">已确认资料</h2><p class="hint">只填写可向对方明确说明的事实。未确认的字段留空。</p>
+<form id="documentForm"><div id="fields"></div><label><span><input id="confirmed" type="checkbox" style="width:auto;min-height:auto"> 我已核对以上资料，确认可以用于起草回复</span></label>
+<button class="primary" type="submit">保存资料</button></form></section>
+<section class="panel"><h2>待回复消息</h2><label>会话备注（选填）<input id="conversationNote" maxlength="120" placeholder="例如：候选人 A；仅作本地备注"></label><label>粘贴对方的原话<textarea id="message" maxlength="8000" placeholder="例如：请问工作地点在哪里，薪资范围是多少？"></textarea></label>
+<div class="actions"><button id="generate" class="primary">生成回复草稿</button><button id="cancel" disabled>取消任务</button></div>
+<p id="stage" class="hint" aria-live="polite">等待消息</p><div id="reply" class="reply" aria-live="polite">草稿将在这里显示。</div>
+<p id="basis" class="hint"></p><button id="copy" disabled>复制草稿</button><p class="hint">复制仅复制文字；请回到原平台核对并自行发送。</p></section>
+</div>
+<section class="panel" style="margin-top:32px"><h2>待回消息与处理记录</h2><p class="hint">消息由你手动录入。复制和人工处理标记均不表示平台已发送。按会话备注或对方原话搜索，每页最多 50 条。</p><label>查看记录<select id="reviewFilter"><option value="pending">待处理</option><option value="handled">已人工处理</option><option value="all">全部记录</option><option value="superseded">已被新草稿替换</option></select></label><label>处理环节<select id="stageFilter"><option value="all">所有环节</option><option value="queued">待起草</option><option value="drafted">有文字草稿</option><option value="needs_review">需人工答复</option><option value="attention">需核对状态 / 资料</option><option value="running">正在起草</option><option value="history">历史替代稿</option></select></label><p id="queueSummary" class="hint" role="status"></p><form id="taskSearchForm"><label>搜索会话备注或对方原话<input id="taskSearch" maxlength="120" placeholder="例如：候选人 A、工作地点"></label><div class="actions"><button id="searchTasks">搜索</button><button id="clearSearch" type="button">清空搜索</button></div></form><p id="taskPageInfo" class="hint" role="status">正在载入记录…</p><div class="actions"><button id="previousTasks" disabled>上一页</button><button id="nextTasks" disabled>下一页</button></div><div class="actions"><button id="selectBatch">选中前 10 条可起草消息</button><button id="clearBatch">清空选择</button><button id="draftBatch" class="primary" disabled>为选中消息生成草稿</button></div><p id="batchSelection" class="hint" role="status">已选 0 条，单次最多 10 条。生成后请逐条核对。</p><p id="batchOutcome" class="hint" role="status" aria-live="polite"></p><div id="tasks">暂无任务</div></section>
+<section id="controlPanel" class="panel" style="margin-top:32px" hidden><h2>待核对的设置操作</h2><p class="hint">尚未开始的请求可结束；其他操作可核对本地提交凭据。这些操作都不会重新执行原请求。</p><div id="controlTasks"></div></section>
+<details id="exportPanel"><summary>导出当前工作区记录</summary><p class="hint">包含当前工作区所有已保存的岗位或本人资料、消息、草稿、人工进度和全部修改历史，不受列表筛选及页数限制。文件为明文 JSON，请妥善保管。未保存输入不会导出；当前不支持导入恢复，也不包含平台发送凭据。</p><button id="prepareExport">准备导出文件</button><p id="exportStatus" class="hint" role="status" aria-live="polite">尚未准备文件。</p><a id="downloadExport" hidden>保存 JSON 文件</a></details>
+<details><summary>开发者信息</summary><button id="events">查看当前身份的执行记录</button><pre id="eventLog"></pre></details>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let context = null, revision = 0, active = null, draftSnapshot = null, batchAttempt = null, tasksLoad = 0, workspaceLoad = 0;
+let selectedDrafts = new Set(), batchCandidates = new Map(), batchRun = null;
+function refreshBatchControls(){for(const [id,box] of batchCandidates){box.checked=selectedDrafts.has(id);box.disabled=!!batchRun;}const busy=!!batchRun;$('selectBatch').disabled=busy||!batchCandidates.size;$('clearBatch').disabled=busy||!selectedDrafts.size;$('draftBatch').disabled=busy||!selectedDrafts.size;$('batchSelection').textContent=busy?'正在顺序生成草稿，遇到资料或身份变化将停止…':'已选 '+selectedDrafts.size+' 条，单次最多 10 条。生成后请逐条核对。';}
+let taskQuery='', taskCursors=[null], taskPage=0, nextTaskCursor=null, taskPageLoading=false;
+function resetTaskSearch(clearQuery=false){taskCursors=[null];taskPage=0;nextTaskCursor=null;if(clearQuery){taskQuery='';$('taskSearch').value='';}selectedDrafts.clear();batchCandidates.clear();refreshBatchControls();$('tasks').replaceChildren();$('previousTasks').disabled=true;$('nextTasks').disabled=true;}
+let exportRun=null, preparedExport=null, downloadRun=null;
+function clearExport(){if(preparedExport)URL.revokeObjectURL(preparedExport.url);preparedExport=null;exportRun=null;downloadRun=null;$('downloadExport').hidden=true;$('downloadExport').removeAttribute('href');$('prepareExport').disabled=false;$('exportStatus').textContent='尚未准备文件。';}
+$('prepareExport').onclick=async()=>{if(exportRun||!context)return;clearExport();const run={token:context.context_token,scope:context.scope_id,epoch:workspaceLoad};exportRun=run;$('prepareExport').disabled=true;$('exportStatus').textContent='正在核对并准备当前工作区记录…';try{const data=await api('workspace/export',{},run.token);if(context?.context_token!==run.token||workspaceLoad!==run.epoch||exportRun!==run)return;if(data.format!=='jobkit.workspace-records'||![1,2].includes(data.format_version)||data.workspace?.scope_id!==run.scope||!Array.isArray(data.tasks)||!Array.isArray(data.draft_edits)||data.counts?.tasks!==data.tasks.length||data.counts?.draft_edits!==data.draft_edits.length||data.restore_supported!==false||data.platform_send_evidence!==false)throw new Error('导出结果无法完整核对，未生成文件。');const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'});const url=URL.createObjectURL(blob);preparedExport={...run,url};$('downloadExport').href=url;$('downloadExport').download='jobkit-records-'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';$('downloadExport').hidden=false;$('exportStatus').textContent='已准备 '+data.counts.tasks+' 条消息、'+data.counts.draft_edits+' 次人工修改，资料版本 '+data.document.revision+'。点击保存 JSON 文件，并检查浏览器下载位置；当前不支持导入恢复。';}catch(e){if(context?.context_token===run.token&&workspaceLoad===run.epoch&&exportRun===run){$('exportStatus').textContent='未生成导出文件，请核对提示后再操作。';handleError(e);}}finally{if(exportRun===run){exportRun=null;$('prepareExport').disabled=false;}}};
+$('downloadExport').onclick=async event=>{event.preventDefault();if(downloadRun)return;const prepared=preparedExport;if(!prepared||prepared.token!==context?.context_token||prepared.epoch!==workspaceLoad){clearExport();notice('工作区已变化，请重新准备导出文件。',true);return;}const run={prepared};downloadRun=run;$('exportStatus').textContent='正在核对当前工作区，随后交给浏览器保存…';try{await api('document',undefined,prepared.token);if(downloadRun!==run||preparedExport!==prepared||context?.context_token!==prepared.token||workspaceLoad!==prepared.epoch)return;const link=document.createElement('a');link.href=prepared.url;link.download=$('downloadExport').download;link.click();$('exportStatus').textContent='文件已交给浏览器保存，请检查下载位置及文件内容。文件仍是准备时的快照，当前不支持导入恢复。';}catch(e){if(downloadRun===run&&preparedExport===prepared&&context?.context_token===prepared.token&&workspaceLoad===prepared.epoch){clearExport();handleError(e);}}finally{if(downloadRun===run)downloadRun=null;}};
+const labels = {
+ recruiter:{title:'岗位名称',location:'工作地点',salary:'已批准薪资范围',hours:'工作时间与班次',duties:'岗位职责',process:'招聘与面试流程',source:'资料来源 / 审核依据'},
+ applicant:{city:'居住城市',current_status:'在职 / 离职 / 应届状态',available:'已确认的最快到岗时间',salary_target:'期望薪资',onsite_availability:'已确认的现场面试安排',education:'已确认的最高学历（例如：本科）',experience:'已确认的工作年限（例如：1年或应届）',skills:'已确认的技术与技能',project_summary:'允许向招聘者介绍的项目经历'}
+};
+const queueLabels={queued:'待起草',drafted:'有文字草稿',needs_review:'需人工答复',attention:'需核对状态 / 资料',running:'正在起草',history:'历史替代稿'};
+const states={queued:'等待执行',executing:'正在处理',completed:'处理完成',cancelled:'已取消',blocked:'需重新核对资料或身份',failed:'处理失败',outcome_unknown:'结果待核对'};
+function notice(text,error=false){$('notice').textContent=text;$('notice').dataset.error=String(error);}
+let applicantPlanRevision=0, applicantPlanRun=null, applicantChannelRun=null, applicantJobsRun=null, salaryReviewRun=null;
+let browserBindingRun=null,browserBindingObservation=null,browserBindingRevision=0,inboxRun=null,selectedMessagesRun=null,selectedMessagesSnapshot=null,observedReplyRun=null;
+function clearObservedReply(){selectedMessagesSnapshot=null;observedReplyRun=null;$('observedReplyStatus').textContent='读取消息后，可按已确认本人资料准备本地回复草稿；不会发送。';$('observedReplyText').textContent='';$('observedReplyText').hidden=true;}
+function clearSelectedMessages(){clearObservedReply();selectedMessagesRun=null;$('readSelectedMessages').disabled=false;$('selectedMessages').replaceChildren();$('selectedMessagesStatus').textContent='请先在 BOSS 沟通页选择会话。这里只读取，不发送。';}
+function observedReplyBlock(result){const pending=[];for(let i=result.messages.length-1;i>=0;i--){const message=result.messages[i];if(message.direction!=='incoming')break;pending.unshift(message);}if(result.messages.length>pending.length&&result.messages[result.messages.length-pending.length-1].direction==='unknown')return null;if(!pending.length||pending.length>10||pending.some(m=>m.kind!=='text'||m.message_id_source!=='dom_data_mid'||!m.full_text_available||m.text_truncated||typeof m.message_id!=='string'||!m.message_id||['undefined','null','nan','0','-1'].includes(m.message_id.toLowerCase()))||Array.from(pending.map(m=>m.text).join('\n\n')).length>8000)return null;return pending;}
+function appendObservedReplyControl(observation,run){
+ const pending=observedReplyBlock(observation.data);
+ if(!pending){$('observedReplyStatus').textContent='末尾消息包含已回复、未完整读取或需人工核对的内容，暂不自动准备回复。';return;}
+ if(!observation.trace_id||!observation.data.binding_revision)return;
+ const snapshot={token:run.token,epoch:run.epoch,observation,pending};selectedMessagesSnapshot=snapshot;lastRead={traceId:observation.trace_id,bindingRevision:observation.data.binding_revision,profileRevision:revision};
+ const button=document.createElement('button');button.type='button';button.textContent='基于本次消息准备回复草稿（'+pending.length+' 条）';$('selectedMessages').append(button);
+ button.onclick=async()=>{
+  if(observedReplyRun||selectedMessagesSnapshot!==snapshot||context?.context_token!==snapshot.token||workspaceLoad!==snapshot.epoch)return;
+  const preparing={snapshot};observedReplyRun=preparing;button.disabled=true;$('observedReplyText').textContent='';$('observedReplyText').hidden=true;$('observedReplyStatus').textContent='正在按本次读取的消息准备本地草稿…';
+  const current=()=>observedReplyRun===preparing&&selectedMessagesSnapshot===snapshot&&context?.context_token===snapshot.token&&workspaceLoad===snapshot.epoch;
+  try{
+   const prepared=await api('applicant/replies/prepare',{message_observation_task_id:observation.trace_id,message_ids:pending.map(m=>m.message_id),expected_profile_revision:revision,expected_binding_revision:observation.data.binding_revision},snapshot.token);if(!current())return;
+   let task=prepared.task;
+   if(task.status==='queued'){task=await api('tasks/'+task.task_id+'/execute',{},snapshot.token);if(!current())return;}
+   const view=await api('applicant/replies/'+prepared.intent.intent_id,undefined,snapshot.token);if(!current())return;
+   if(view.profile_stale||view.binding_stale||view.context_stale){$('observedReplyStatus').textContent='本人资料或会话已变化，请重新核对消息与已有草稿；不会发送。';return;}
+   task=view.task;
+   if(task.status!=='completed'){$('observedReplyStatus').textContent='已有草稿任务尚未完成，请在待处理清单核对；不会自动重试或另建重复草稿。';return;}
+   const text=task.manual_text||task.result?.text;
+   if(text){setLoopDraft({intentId:prepared.intent.intent_id,taskId:task.task_id,manualRevision:task.manual_revision||0,text});$('observedReplyText').textContent=text;$('observedReplyText').hidden=false;$('observedReplyStatus').textContent='已按 '+pending.length+' 条对方消息准备本地草稿。'+(!prepared.intent.block_boundary_observed?'请核对页面未加载的更早消息。':'')+'发送对象与消息时效尚未核实，未发送。';}
+   else{$('observedReplyStatus').textContent=(task.result?.skip?'这批消息无需自动回复：':'这批问题需要人工核对：')+(task.result?.reason||'请查看原消息和已确认资料。');}
+  }catch(error){if(current()){$('observedReplyStatus').textContent='草稿准备未完成，请核对提示和已有草稿；不会重复发送。';handleError(error);}}
+  finally{if(current()){observedReplyRun=null;button.disabled=false;}}
+ };
+}
+$('readSelectedMessages').onclick=async()=>{
+ if(selectedMessagesRun||context?.role!=='applicant')return;clearObservedReply();const run={token:context.context_token,epoch:workspaceLoad};selectedMessagesRun=run;$('readSelectedMessages').disabled=true;$('selectedMessages').replaceChildren();$('selectedMessagesStatus').textContent='正在读取当前选中会话…';
+ const current=()=>selectedMessagesRun===run&&context?.context_token===run.token&&workspaceLoad===run.epoch;
+ try{const observation=await api('applicant/messages/read',{},run.token,true),result=observation.data;if(!current())return;
+  if(result.status!=='observed_messages'){const notices={binding_required:'请先核对求职账号并关联专用会话。',chat_page_required:'请先在专用浏览器打开 BOSS 沟通页。',conversation_selection_required:'请先在 BOSS 沟通页选择一条会话，再回来读取。',empty_or_loading:'当前会话消息尚未核对或仍在加载，请在 BOSS 页面确认后重试。',recipient_reference_mismatch:'当前会话与消息区域尚未对应，请在 BOSS 页面确认后重试。',restricted:'平台要求验证或限制访问，请自行核对后再重试。'};$('selectedMessagesStatus').textContent=notices[result.status]||'当前会话尚未完整核对，请检查登录、会话关联和页面后重试。';return;}
+  if(!Array.isArray(result.messages)||!result.party||result.recipient_verified!==false||result.automation_ready!==false)throw new Error('当前会话结果无法核对。');
+  const heading=document.createElement('strong');heading.textContent=result.party.party_summary||result.party.display_name;$('selectedMessages').append(heading);
+  for(const message of result.messages){const card=document.createElement('div');card.className='task';const label=document.createElement('strong');label.textContent=({incoming:'对方消息',outgoing:'本人消息',unknown:'消息方向待核对'}[message.direction]||'消息方向待核对')+(message.timestamp_label?' · '+message.timestamp_label:'');card.append(label);const body=document.createElement('p');
+   body.textContent=message.kind==='text'?message.text:message.kind==='media'?'图片或媒体消息，请在 BOSS 原页面查看。':message.kind==='card'?'卡片消息，请在 BOSS 原页面查看。':'此消息暂不能完整读取，请在原页面查看。';card.append(body);
+   if(message.text_truncated||!message.full_text_available){const note=document.createElement('p');note.className='hint';note.textContent='此条内容尚未完整读取，不可据此自动回复。';card.append(note);}$('selectedMessages').append(card);}
+  $('selectedMessagesStatus').textContent='已读取 '+result.messages.length+' 条页面已加载消息'+(result.messages_truncated?'（达到读取上限）':'')+'；不代表全部历史。发送对象尚未核实，未开启自动回复。';
+  appendObservedReplyControl(observation,run);
+ }catch(error){if(current()){$('selectedMessagesStatus').textContent='消息读取未完成，请核对提示后重试。';handleError(error);}}
+ finally{if(current()){selectedMessagesRun=null;$('readSelectedMessages').disabled=false;}}
+};
+function clearBrowserBinding(){clearSelectedMessages();browserBindingRun=null;browserBindingObservation=null;browserBindingRevision=0;inboxRun=null;$('browserBindingConfirmed').checked=false;$('browserBindingLabel').hidden=true;$('saveBrowserBinding').disabled=true;$('readApplicantIdentity').disabled=false;$('checkApplicantBinding').disabled=false;$('readApplicantInbox').disabled=false;$('inboxRows').replaceChildren();$('inboxStatus').textContent='预览不等于完整消息，当前不能据此自动回复。';$('browserBindingStatus').textContent='关联专用浏览器会话后可读取沟通列表；不会开启发送。';}
+function bindingRunCurrent(run){return browserBindingRun===run&&context?.context_token===run.token&&workspaceLoad===run.epoch;}
+$('browserBindingConfirmed').onchange=()=>{$('saveBrowserBinding').disabled=!$('browserBindingConfirmed').checked||!browserBindingObservation||!!browserBindingRun;};
+$('readApplicantIdentity').onclick=async()=>{
+ if(browserBindingRun||context?.role!=='applicant')return;const run={token:context.context_token,epoch:workspaceLoad};browserBindingRun=run;browserBindingObservation=null;
+ $('browserBindingConfirmed').checked=false;$('browserBindingLabel').hidden=true;$('saveBrowserBinding').disabled=true;$('readApplicantIdentity').disabled=true;
+ try{const saved=await api('applicant/browser/binding',undefined,run.token);if(!bindingRunCurrent(run))return;
+  const observed=await api('applicant/identity/read',{},run.token,true);if(!bindingRunCurrent(run))return;
+  if(observed.data?.status!=='display_name_observed'||!observed.trace_id||!observed.data.browser_session_fingerprint){$('browserBindingStatus').textContent='账号显示信息尚未核对，请检查专用浏览器登录和岗位页。';return;}
+  browserBindingRevision=saved.revision;browserBindingObservation={...run,observed};$('browserBindingLabel').hidden=false;$('browserBindingStatus').textContent='页面显示姓名：'+observed.data.display_name+'。请核对本人账号后关联；发送仍未启用。';
+ }catch(error){if(bindingRunCurrent(run))handleError(error);}finally{if(bindingRunCurrent(run)){browserBindingRun=null;$('readApplicantIdentity').disabled=false;}}
+};
+$('saveBrowserBinding').onclick=async()=>{
+ const snapshot=browserBindingObservation;if(browserBindingRun||!snapshot||!$('browserBindingConfirmed').checked||context?.context_token!==snapshot.token||workspaceLoad!==snapshot.epoch)return;
+ const run={token:snapshot.token,epoch:snapshot.epoch};browserBindingRun=run;$('saveBrowserBinding').disabled=true;
+ try{const value=snapshot.observed.data;const saved=await api('applicant/browser/binding',{identity_observation_task_id:snapshot.observed.trace_id,expected_display_name:value.display_name,expected_browser_session_fingerprint:value.browser_session_fingerprint,expected_revision:browserBindingRevision,confirmed:true},run.token);
+  if(!bindingRunCurrent(run))return;browserBindingRevision=saved.revision;browserBindingObservation=null;$('browserBindingConfirmed').checked=false;$('browserBindingLabel').hidden=true;$('browserBindingStatus').textContent='专用会话已关联；请检查当前会话后读取沟通列表。尚未启用发送。';
+ }catch(error){if(bindingRunCurrent(run))handleError(error);}finally{if(bindingRunCurrent(run)){browserBindingRun=null;$('saveBrowserBinding').disabled=!browserBindingObservation||!$('browserBindingConfirmed').checked;}}
+};
+$('checkApplicantBinding').onclick=async()=>{
+ if(browserBindingRun||context?.role!=='applicant')return;const run={token:context.context_token,epoch:workspaceLoad};browserBindingRun=run;$('checkApplicantBinding').disabled=true;
+ try{const result=await api('applicant/browser/binding/check',{},run.token);if(!bindingRunCurrent(run))return;
+  $('browserBindingStatus').textContent=result.session_matches_confirmation?'当前浏览器和显示账号与已关联会话一致；发送仍未启用。':result.status==='binding_required'?'请先核对账号并关联专用会话。':'会话尚未核对或已经变化，请重新核对账号；不会自动发送。';
+ }catch(error){if(bindingRunCurrent(run))handleError(error);}finally{if(bindingRunCurrent(run)){browserBindingRun=null;$('checkApplicantBinding').disabled=false;}}
+};
+$('readApplicantInbox').onclick=async()=>{
+ if(inboxRun||context?.role!=='applicant')return;const run={token:context.context_token,epoch:workspaceLoad};inboxRun=run;$('readApplicantInbox').disabled=true;$('inboxRows').replaceChildren();
+ const current=()=>inboxRun===run&&context?.context_token===run.token&&workspaceLoad===run.epoch;
+ try{const result=await api('applicant/conversations/read',{},run.token);if(!current())return;
+  if(result.status!=='observed_previews'){$('inboxStatus').textContent=result.status==='binding_required'?'请先核对账号并关联专用会话。':result.status==='chat_page_required'?'请在专用 BOSS 浏览器打开沟通页后重试。':'沟通列表尚未核对，请检查登录、验证提示和会话关联。';return;}
+  if(!Array.isArray(result.rows)||result.automation_ready!==false)throw new Error('会话预览结果无法核对。');
+  for(const row of result.rows){const card=document.createElement('div');card.className='task';const heading=document.createElement('strong');heading.textContent=row.party_summary||row.display_name;card.append(heading);const text=document.createElement('p');text.textContent=(row.unread_marker?'有未读提示 · ':'')+row.last_message_preview+(row.preview_truncated?'（预览有截断）':'');card.append(text);const note=document.createElement('p');note.className='hint';note.textContent='会话列表预览，尚无完整消息及发送对象验证，不能自动回复。';card.append(note);$('inboxRows').append(card);}
+  $('inboxStatus').textContent='已读取 '+result.rows.length+' 条会话预览'+(result.list_truncated?'（本次达到读取上限）':'')+'。没有发送回复。';
+ }catch(error){if(current())handleError(error);}finally{if(current()){inboxRun=null;$('readApplicantInbox').disabled=false;}}
+};
+function clearSalaryReview(){salaryReviewRun=null;$('reviewApplicantSalaries').disabled=false;$('salaryReviews').replaceChildren();$('salaryReviewStatus').textContent='识别金额需对照 BOSS 页面逐条确认；不会发送消息。';}
+function salaryReviewCurrent(run){return salaryReviewRun===run&&context?.context_token===run.token&&workspaceLoad===run.epoch;}
+$('reviewApplicantSalaries').onclick=async()=>{
+ if(salaryReviewRun?.busy||context?.role!=='applicant')return;
+ clearSalaryReview();const run={token:context.context_token,epoch:workspaceLoad,busy:true,ids:[]};salaryReviewRun=run;
+ $('reviewApplicantSalaries').disabled=true;$('salaryReviewStatus').textContent='正在读取岗位和页面显示的薪资…';
+ try{
+  const jobs=await api('applicant/jobs/read',{},run.token,true);if(!salaryReviewCurrent(run))return;
+  if(jobs.data?.status!=='observed'||!jobs.data.matching_ready){$('salaryReviewStatus').textContent='请先核对本人资料、求职方案和专用岗位页面，再重试。';return;}
+  run.jobs=jobs;const salary=await api('applicant/salaries/read',{},run.token,true);if(!salaryReviewCurrent(run))return;
+  if(salary.data?.status!=='observed'){$('salaryReviewStatus').textContent=salary.data?.status==='browser_not_visible'?'请恢复专用 BOSS 窗口，并保持岗位页正常显示。':'薪资页面尚未核对，请检查登录、验证提示或页面后重试。';return;}
+  if(!jobs.trace_id||!salary.trace_id||!Array.isArray(salary.data.salaries)||!Array.isArray(jobs.data.candidates))throw new Error('薪资核对依据不完整，请重新读取。');
+  run.salary=salary;let shown=0;
+  for(const evidence of salary.data.salaries){
+   const job=jobs.data.candidates.find(item=>item.job_id===evidence.job_id);
+   if(!job||job.salary!==evidence.raw_text||evidence.status!=='needs_confirmation')continue;
+   const card=document.createElement('div');card.className='task';
+   const title=document.createElement('strong');title.textContent=job.title+' · '+job.company;card.append(title);
+   const amount=document.createElement('p');amount.textContent=job.city+' · 页面识别薪资：'+evidence.recognized_text+'。请对照 BOSS 原页面核对。';card.append(amount);
+   const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.setAttribute?.('style','width:auto');
+   const caption=document.createElement('span');caption.textContent='我已对照原页面确认该岗位金额';label.append(box,caption);card.append(label);
+   const confirm=document.createElement('button');confirm.type='button';confirm.textContent='确认金额并重新匹配';confirm.disabled=true;card.append(confirm);
+   const status=document.createElement('p');status.className='hint';card.append(status);
+   box.onchange=()=>{confirm.disabled=!box.checked;};
+   confirm.onclick=async()=>{
+    if(!salaryReviewCurrent(run)||run.busy)return;
+    if(!box.checked){notice('请先对照原页面核对并勾选金额。',true);return;}
+    if(revision!==jobs.data.profile_revision||applicantPlanRevision!==jobs.data.plan_revision){status.textContent='资料或方案已变化，请重新读取岗位。';confirm.disabled=true;return;}
+    run.busy=true;confirm.disabled=true;box.disabled=true;let saved=false;
+    try{
+     const record=await api('applicant/salaries/confirm',{job_observation_task_id:jobs.trace_id,salary_observation_task_id:salary.trace_id,job_id:job.job_id,expected_profile_revision:jobs.data.profile_revision,expected_plan_revision:jobs.data.plan_revision,expected_salary_text:evidence.recognized_text,confirmed:true},run.token);
+     if(!salaryReviewCurrent(run))return;saved=true;if(!run.ids.includes(record.confirmation_id))run.ids.push(record.confirmation_id);
+     status.textContent='金额已确认，正在重新匹配…';
+     const preview=await api('applicant/jobs/confirmed-preview',{job_observation_task_id:jobs.trace_id,confirmation_ids:run.ids.slice(),expected_profile_revision:jobs.data.profile_revision,expected_plan_revision:jobs.data.plan_revision},run.token,true);
+     if(!salaryReviewCurrent(run))return;
+     const candidate=preview.data.candidates.find(item=>item.job_id===job.job_id);
+     status.textContent='金额已确认；'+({eligible:'符合已保存筛选条件',needs_review:'仍需核对：'+(candidate?.needs||[]).join('、'),rejected:'不符合已保存筛选条件'}[candidate?.decision]||'请重新读取匹配结果')+'。未发送消息。';
+     $('salaryReviewStatus').textContent='本次匹配：符合 '+preview.data.counts.eligible+' 条，待核对 '+preview.data.counts.needs_review+' 条，不符合 '+preview.data.counts.rejected+' 条。尚未启用发送。';
+     if(candidate?.decision==='eligible'){
+      const prepare=document.createElement('button');prepare.type='button';prepare.textContent='准备招呼草稿';card.append(prepare);
+      prepare.onclick=async()=>{
+       if(!salaryReviewCurrent(run)||run.busy)return;run.busy=true;prepare.disabled=true;
+       try{const intent=await api('applicant/greetings/prepare',{observation_task_id:preview.trace_id,job_id:job.job_id,expected_profile_revision:jobs.data.profile_revision,expected_plan_revision:jobs.data.plan_revision},run.token);if(!salaryReviewCurrent(run))return;
+        const draft=document.createElement('div');draft.className='reply';draft.textContent=intent.text;card.append(draft);status.textContent='招呼草稿已准备，发送通道尚未开通。';
+       }catch(error){if(salaryReviewCurrent(run)){status.textContent='招呼未准备，请重新核对岗位与提示。';handleError(error);}}finally{if(salaryReviewCurrent(run))run.busy=false;}
+      };
+     }
+    }catch(error){if(salaryReviewCurrent(run)){status.textContent=saved?'金额已保存，匹配未完成，请重新读取并核对。':'金额未确认，请核对提示后重新读取。';handleError(error);}}
+    finally{if(salaryReviewCurrent(run)){run.busy=false;confirm.disabled=saved||!box.checked;box.disabled=saved;}}
+   };
+   $('salaryReviews').append(card);shown++;
+  }
+  $('salaryReviewStatus').textContent=shown?'已识别 '+shown+' 个岗位薪资，请逐条对照原页面确认。未勾选的金额不会用于匹配。':'本次没有可直接核对的薪资，请检查页面后重试。';
+ }catch(error){if(salaryReviewCurrent(run)){$('salaryReviewStatus').textContent='薪资读取未完成，请核对提示后重试。';handleError(error);}}
+ finally{if(salaryReviewCurrent(run)){run.busy=false;$('reviewApplicantSalaries').disabled=false;}}
+};
+const applicantPlanFields=['planKeywords','planPrimaryCities','planSecondaryCities','planSalary','planGreetings','planReplies','planExcluded','planGreeting'];
+function clearApplicantPlan(){clearBrowserBinding();clearLoop();clearJobSearch();clearSalaryReview();applicantJobsRun=null;$('readApplicantJobs').disabled=false;$('applicantJobs').replaceChildren();$('applicantJobsStatus').textContent='只读取专用浏览器当前岗位页，不会发送招呼。';applicantChannelRun=null;$('checkApplicantChannel').disabled=false;$('applicantChannelStatus').textContent='尚未检查浏览器连接。';applicantPlanRevision=0;applicantPlanRun=null;$('applicantPlanPanel').hidden=true;for(const id of applicantPlanFields)$(id).value='';$('planConfirmed').checked=false;$('saveApplicantPlan').disabled=false;$('applicantPlanStatus').textContent='尚未读取方案。';}
+function paintApplicantPlan(value){$('planKeywords').value=value.keywords.join('，');$('planPrimaryCities').value=value.primary_cities.join('，');$('planSecondaryCities').value=value.secondary_cities.join('，');$('planSalary').value=String(value.salary_min);$('planGreetings').value=String(value.daily_greetings);$('planReplies').value=String(value.daily_replies);$('planExcluded').value=value.excluded_terms.join('，');$('planGreeting').value=value.greeting_template;}
+function collectApplicantPlan(){const readNumber=id=>$(id).value.trim()===''?null:Number($(id).value);const words=id=>$(id).value.split(/[，,\n]/).map(text=>text.trim()).filter(Boolean);return {keywords:words('planKeywords'),primary_cities:words('planPrimaryCities'),secondary_cities:words('planSecondaryCities'),salary_min:readNumber('planSalary'),daily_greetings:readNumber('planGreetings'),daily_replies:readNumber('planReplies'),excluded_terms:words('planExcluded'),greeting_template:$('planGreeting').value};}
+async function loadApplicantPlan(token,epoch){const doc=await api('applicant/plan',undefined,token);if(context?.context_token!==token||workspaceLoad!==epoch)return;const value=doc.revision?doc.content:doc.suggested_preset;if(!Number.isInteger(doc.revision)||doc.revision<0||!value||!Array.isArray(value.keywords)||!Array.isArray(value.primary_cities)||!Array.isArray(value.secondary_cities)||!Array.isArray(value.excluded_terms))throw new Error('求职方案未能完整读取，请重新加载。');applicantPlanRevision=doc.revision;paintApplicantPlan(value);$('applicantPlanPanel').hidden=false;$('applicantPlanStatus').textContent=doc.revision?'已保存方案第 '+doc.revision+' 版；平台自动发送尚未启用。':'已填入待确认的求职方案，请核对后保存；尚未启动自动发送。';}
+for(const id of applicantPlanFields)$(id).oninput=()=>{$('planConfirmed').checked=false;$('applicantPlanStatus').textContent='方案有未保存修改，请核对确认。';};
+$('checkApplicantChannel').onclick=async()=>{if(applicantChannelRun||context?.role!=='applicant')return;const run={token:context.context_token,epoch:workspaceLoad};applicantChannelRun=run;$('checkApplicantChannel').disabled=true;try{const result=await api('applicant/channel',undefined,run.token);if(applicantChannelRun!==run||context?.context_token!==run.token||workspaceLoad!==run.epoch)return;$('applicantChannelStatus').textContent=result.status==='unavailable'?'本地求职浏览器尚未连接，请按交付说明打开专用浏览器并自行登录。':result.boss_page_count?'已发现求职页面；仍需核对账号、页面读取和发送结果，自动发送尚未启用。':'已连接浏览器，但尚未发现可核对的求职页面。';}catch(error){if(applicantChannelRun===run)handleError(error);}finally{if(applicantChannelRun===run){applicantChannelRun=null;$('checkApplicantChannel').disabled=false;}}};
+$('readApplicantJobs').onclick=async()=>{if(applicantJobsRun||context?.role!=='applicant')return;const run={token:context.context_token,epoch:workspaceLoad};applicantJobsRun=run;$('readApplicantJobs').disabled=true;$('applicantJobs').replaceChildren();$('applicantJobsStatus').textContent='正在读取当前求职页面…';try{const result=await api('applicant/jobs/read',{},run.token);if(applicantJobsRun!==run||context?.context_token!==run.token||workspaceLoad!==run.epoch)return;const messages={auth_required:'请在专用求职浏览器中自行登录后再读取。',restricted:'页面要求验证或限制访问，已停止读取，请自行核对。',schema_changed:'当前页面无法完整读取，未进入自动处理。',unavailable:'专用求职浏览器未连接。',page_selection_required:'请在专用浏览器中只保留一个岗位列表页后重试。',empty:'当前页面明确显示暂无相关岗位。'};if(result.status!=='observed'){$('applicantJobsStatus').textContent=messages[result.status]||'岗位页面未能核对，未启动处理。';return;}if(!result.matching_ready){$('applicantJobsStatus').textContent='已读取 '+result.observed_count+' 条岗位，请先核对保存本人资料和求职方案。';return;}if(!Array.isArray(result.candidates)||!result.counts)throw new Error('岗位核对结果不完整。');$('applicantJobsStatus').textContent='当前页：符合筛选项 '+result.counts.eligible+' 条，需核对 '+result.counts.needs_review+' 条，不符合 '+result.counts.rejected+' 条。账号与发送验证尚未完成，没有发送招呼。';for(const job of result.candidates){const card=document.createElement('div');card.className='task';const heading=document.createElement('strong');heading.textContent=job.title+' · '+job.company;card.append(heading);const info=document.createElement('p');info.textContent=job.city+' · '+job.salary+' · '+({eligible:'符合已填筛选项',needs_review:'需要进一步核对',rejected:'不符合已填条件'}[job.decision]||'尚未核对');card.append(info);if(job.needs?.length){const note=document.createElement('p');note.textContent='待核对：'+job.needs.join('、');card.append(note);}if(job.greeting){const draft=document.createElement('div');draft.className='reply';draft.textContent=job.greeting;card.append(draft);}$('applicantJobs').append(card);}}catch(error){if(applicantJobsRun===run){$('applicantJobsStatus').textContent='岗位读取未完成，请核对提示。';handleError(error);}}finally{if(applicantJobsRun===run){applicantJobsRun=null;$('readApplicantJobs').disabled=false;}}};
+$('applicantPlanForm').onsubmit=async event=>{event.preventDefault();if(applicantPlanRun)return;const token=context?.context_token;if(!token||context.role!=='applicant'){notice('请先切换并加载求职者工作区。',true);return;}if(!$('planConfirmed').checked){notice('请先核对并确认求职方案。',true);return;}const run={token,epoch:workspaceLoad,content:collectApplicantPlan()};applicantPlanRun=run;$('saveApplicantPlan').disabled=true;try{const doc=await api('applicant/plan',{content:run.content,expected_revision:applicantPlanRevision,confirmed:true},token);if(context?.context_token!==token||workspaceLoad!==run.epoch||applicantPlanRun!==run)return;applicantPlanRevision=doc.revision;$('planConfirmed').checked=false;$('applicantPlanStatus').textContent=JSON.stringify(collectApplicantPlan())===JSON.stringify(run.content)?'已保存方案第 '+doc.revision+' 版；尚未启动自动发送。':'提交时的方案已保存，当前编辑仍有未保存修改。';notice('求职方案已保存；平台自动发送尚未启用。');}catch(error){if(context?.context_token===token&&workspaceLoad===run.epoch)handleError(error);}finally{if(applicantPlanRun===run){applicantPlanRun=null;$('saveApplicantPlan').disabled=false;}}};
+function clearPrivate(){clearApplicantPlan();clearExport();$('stageFilter').value='all';$('queueSummary').textContent='';resetTaskSearch(true);taskPageLoading=false;$('taskPageInfo').textContent='正在载入记录…'; $('batchOutcome').textContent='';selectedDrafts.clear();batchCandidates.clear();batchRun=null;refreshBatchControls();context=null;tasksLoad++;workspaceLoad++;$('importBatch').disabled=false;$('identity').textContent='正在读取当前身份…';$('fields').replaceChildren();$('tasks').replaceChildren();$('conversationNote').value='';$('batchMessages').value='';$('reviewFilter').value='pending';batchAttempt=null;$('controlTasks').replaceChildren();$('controlPanel').hidden=true;$('message').value='';$('reply').textContent='草稿将在这里显示。';$('stage').textContent='等待消息';$('basis').textContent='';$('eventLog').textContent='';$('confirmed').checked=false;$('copy').disabled=true;active=null;draftSnapshot=null;$('cancel').disabled=true;$('generate').disabled=false; }
+async function api(path,body,token=context?.context_token,includeTrace=false){
+ const headers={'Content-Type':'application/json'};if(token)headers['X-Jobkit-Context']=token;
+ let r;try{r=await fetch('/api/runtime/'+path,{method:body===undefined?'GET':'POST',headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});}catch{throw new Error('无法连接本机服务，请重新加载工作区。');}
+ let j;try{j=await r.json();}catch{throw new Error('本机服务暂时不可用，请重新加载工作区。');}if(!r.ok||!j.ok){const e=new Error(j.error||'操作未完成，请重试。');e.code=j.code;throw e;}return includeTrace?j:j.data;
+}
+function handleError(e){if(e.code==='STALE_CONTEXT'){clearPrivate();context=null;$('identity').textContent='身份已变化，请重新加载';}notice(e.message,true);}
+async function load(){clearPrivate();const sequence=workspaceLoad;try{const next=await api('context',undefined,null);if(sequence!==workspaceLoad)return;context=next;
+ $('identity').textContent=(next.role==='recruiter'?'招聘者':'求职者')+' · '+next.organization_id+' · '+next.account_id+'（平台未验证）';
+ $('role').value=next.role;$('organization').value=next.organization_id;$('account').value=next.account_id;
+ $('documentTitle').textContent=next.role==='recruiter'?'已确认的岗位资料':'本人已确认资料';
+ const token=next.context_token,doc=await api('document',undefined,token);if(context?.context_token!==token)return;
+ revision=doc.revision;for(const [key,label] of Object.entries(labels[next.role])){const field=document.createElement('label');field.textContent=label;const input=document.createElement('textarea');input.id='fact-'+key;input.maxLength=2000;input.value=doc.content[key]||'';field.append(input);$('fields').append(field);}
+ if(next.role==='applicant'){await loadApplicantPlan(token,sequence);if(sequence!==workspaceLoad)return;initSendLoop();initJobSearch();}
+ await loadTasks(token);if(sequence!==workspaceLoad)return;await loadControls(token);if(sequence===workspaceLoad)notice('当前工作区已载入。');
+}catch(e){if(sequence===workspaceLoad)handleError(e);}
+}
+async function taskAction(path,body,token,button,message){button.disabled=true;try{await api(path,body,token);if(context?.context_token!==token)return;if(message)notice(message);await loadTasks(token);}catch(e){if(context?.context_token===token)handleError(e);}finally{button.disabled=false;}}
+async function copyChecked(snapshot,button){if(!snapshot)return;if(!snapshot.task_id){button.disabled=true;notice('请重新生成草稿后复制。',true);return;}try{const proof=await api('tasks/'+encodeURIComponent(snapshot.task_id)+'/copy',undefined,snapshot.token);if(context?.context_token!==snapshot.token)return;if(proof.document_revision!==snapshot.revision||proof.text!==snapshot.text||(proof.manual_revision||0)!==(snapshot.manual_revision||0)){button.disabled=true;notice('草稿或资料已更新，请重新载入后核对。',true);return;}try{await navigator.clipboard.writeText(proof.text);notice('草稿已复制；尚未在平台发送。');}catch{notice('无法访问剪贴板，请选中草稿后手动复制。',true);}}catch(e){if(context?.context_token!==snapshot.token)return;if(['STALE_FACTS','TASK_SUPERSEDED','COPY_NOT_AVAILABLE','INVALID_DOCUMENT_STATE','STALE_MANUAL_DRAFT','INVALID_MANUAL_DRAFT_STATE'].includes(e.code)){button.disabled=true;if(button===$('copy'))draftSnapshot=null;}handleError(e);}}
+async function loadTasks(token=context?.context_token){const sequence=++tasksLoad;const review=$('reviewFilter').value||'pending',stage=$('stageFilter').value||'all',page=taskPage,query=taskQuery,cursor=taskCursors[page];taskPageLoading=true;$('queueSummary').textContent='正在核对各环节数量…';$('previousTasks').disabled=true;$('nextTasks').disabled=true;$('taskPageInfo').textContent='正在载入记录…';let data;try{data=await api('tasks/search',{review,query,cursor,stage},token);}catch(e){if(context?.context_token!==token||sequence!==tasksLoad)return;taskPageLoading=false;$('queueSummary').textContent='各环节数量暂无法核对。';$('taskPageInfo').textContent='记录未能载入，请重新搜索或加载工作区。';$('previousTasks').disabled=page===0;nextTaskCursor=null;throw e;}if(context?.context_token!==token||sequence!==tasksLoad)return;const rows=data.tasks;$('queueSummary').textContent='当前记录与关键词范围：'+Object.entries(queueLabels).map(([key,label])=>label+' '+data.stage_counts[key]+' 条').join(' · ')+'。各环节数量不代表平台已发送。';taskPageLoading=false;nextTaskCursor=data.next_cursor;$('previousTasks').disabled=page===0;$('nextTasks').disabled=!nextTaskCursor;$('taskPageInfo').textContent='第 '+(page+1)+' 页 · 本页 '+rows.length+' 条 · 当前匹配 '+data.total+' 条'+(query?' · 关键词：'+query:'')+'。记录按创建时间从新到旧排列。';
+ batchCandidates.clear();for(const row of rows){if(row.status==='queued'&&row.review_status==='pending'&&!row.superseded_by_task_id&&!row.draft_stale&&row.document_revision===revision&&row.current_document_revision===revision&&row.input_state==='readable'&&(!row.queue_stage||row.queue_stage==='queued'))batchCandidates.set(row.task_id,null);}selectedDrafts=new Set([...selectedDrafts].filter(id=>batchCandidates.has(id)));const eligible=new Set(batchCandidates.keys());batchCandidates.clear();
+ $('tasks').replaceChildren();if(!rows.length){$('tasks').textContent='当前筛选暂无记录';refreshBatchControls();return;}
+ for(const row of rows){const peerChanged=Number.isInteger(row.current_document_revision)&&row.current_document_revision!==revision;const item=document.createElement('div');item.className='task';const text=document.createElement('div');text.textContent=(row.conversation_note||'未填写会话备注')+' · '+(queueLabels[row.queue_stage]||states[row.status]||'需人工核对')+' · '+(row.review_status==='handled'?'已人工处理':row.review_status==='superseded'?'已被新草稿替换':'待处理')+' · '+new Date(row.created_at*1000).toLocaleString();item.append(text);
+ if(eligible.has(row.task_id)){const label=document.createElement('label'),box=document.createElement('input');box.type='checkbox';box.style='width:auto;min-height:auto';label.textContent='选中此消息生成草稿';label.append(box);box.onchange=()=>{if(batchRun)return;if(box.checked){if(selectedDrafts.size>=10){box.checked=false;notice('单次最多选择 10 条消息。',true);return;}selectedDrafts.add(row.task_id);}else selectedDrafts.delete(row.task_id);refreshBatchControls();};batchCandidates.set(row.task_id,box);item.append(label);}
+ if(peerChanged){const hint=document.createElement('p');hint.textContent='资料已在其他窗口更新，请重新加载工作区核对后再操作。';item.append(hint);}
+ if(row.superseded_by_task_id){const hint=document.createElement('p');hint.textContent='本记录已被替换，请在待处理中查看新的草稿任务。';item.append(hint);}else if(row.draft_stale){const hint=document.createElement('p');hint.textContent='资料已更新，此记录需按当前资料重建后使用。';item.append(hint);}
+ if(row.message){const original=document.createElement('p');original.textContent='对方原话：'+row.message;item.append(original);}
+ if(typeof row.result?.text==='string'&&row.result.text.trim()){if(row.manual_revision){const originalLabel=document.createElement('small');originalLabel.textContent='系统原稿（保留）';item.append(originalLabel);}const preview=document.createElement('div');preview.className=(row.draft_stale||row.superseded_by_task_id)?'reply stale':'reply';preview.textContent=row.result.text;item.append(preview);const basis=document.createElement('small');basis.textContent=((row.draft_stale||row.superseded_by_task_id)?'历史草稿 · ':'')+'资料版本 '+row.result.document_revision+(row.result.citations?.length?' · 依据：'+row.result.citations.map(x=>labels.recruiter[x]||x).join('、'):'');item.append(basis);const copy=document.createElement('button');copy.textContent=row.manual_revision?'复制已确认人工稿':'复制此草稿';copy.disabled=!!row.draft_stale||!!row.superseded_by_task_id||peerChanged||!!(row.queue_stage&&row.queue_stage!=='drafted');const effectiveText=row.manual_revision?row.manual_text:row.result.text;copy.onclick=()=>copyChecked({token,task_id:row.task_id,revision:row.result.document_revision,text:effectiveText,manual_revision:row.manual_revision||0},copy);
+ if(row.manual_revision){const manualLabel=document.createElement('small');manualLabel.textContent='已确认人工稿 · 修改版本 '+row.manual_revision+'（人工核对内容；原稿依据不代表覆盖新增内容）';item.append(manualLabel);const manual=document.createElement('div');manual.className=(row.draft_stale||row.superseded_by_task_id)?'reply stale':'reply';manual.textContent=row.manual_text;item.append(manual);}
+ item.append(copy);
+ if((!row.queue_stage||row.queue_stage==='drafted')&&!row.draft_stale&&!row.superseded_by_task_id&&!peerChanged&&row.status==='completed'&&row.review_status==='pending')appendDraftEditor(item,row,token,copy,effectiveText);
+ if(row.manual_revision)appendEditHistory(item,row,token);
+ }
+ else if(row.result?.reason){const reason=document.createElement('p');reason.textContent='需人工处理：'+row.result.reason;item.append(reason);}
+ if(row.queue_stage==='attention'&&!row.draft_stale&&row.result_state!=='unreadable'){const hint=document.createElement('p');hint.textContent='请核对任务状态和资料，本条不计为可用回复。';item.append(hint);}
+ if(row.result_state==='unreadable'){const hint=document.createElement('p');hint.textContent='保存的草稿结果无法读取，请核对记录；没有自动重跑或回退旧稿。';item.append(hint);}
+ if(row.error_code==='INTERRUPTED'){const hint=document.createElement('small');hint.textContent='上次处理已中断，没有重新执行。请核对资料后重新生成草稿。';item.append(hint);}
+ if(row.status==='outcome_unknown'){const hint=document.createElement('small');hint.textContent='处理结果尚未确认，请先人工核对，暂勿重复操作。';item.append(hint);}
+ if(row.status==='queued'){const generate=document.createElement('button');generate.textContent='生成此条草稿';generate.disabled=!!row.draft_stale||peerChanged;generate.onclick=()=>taskAction('tasks/'+row.task_id+'/execute',{},token,generate,'已核对任务结果；草稿尚未在平台发送。');item.append(generate);}
+ if(row.status==='executing'){const recover=document.createElement('button');recover.textContent='核对中断任务';recover.onclick=async()=>{try{const done=await api('tasks/'+row.task_id+'/recover',{},token);if(context?.context_token!==token)return;notice(done.error_code==='INTERRUPTED'?'已记录为中断；没有重新执行。':done.status==='outcome_unknown'?'结果待核对；请勿重复发送。':'任务状态已核对。');await loadTasks(token);}catch(e){if(context?.context_token===token)handleError(e);}};item.append(recover);}
+ if(row.status==='queued'||row.status==='executing'){const cancel=document.createElement('button');cancel.textContent='取消本地任务';cancel.onclick=()=>taskAction('tasks/'+row.task_id+'/cancel',{},token,cancel,'已核对取消结果。');item.append(cancel);}
+ else if(row.review_status!=='superseded'){const mark=document.createElement('button');mark.textContent=row.review_status==='handled'?'重新列入待处理':'标记已人工处理';mark.onclick=()=>taskAction('tasks/'+row.task_id+'/review',{handled:row.review_status!=='handled',expected_review_revision:row.review_revision},token,mark,'已更新人工处理标记；不表示平台已发送。');item.append(mark);}
+ if(row.draft_stale&&row.review_status==='pending'&&['queued','completed','failed','blocked','cancelled'].includes(row.status)){const replace=document.createElement('button');replace.textContent='按当前资料重建草稿任务';replace.disabled=peerChanged;replace.onclick=()=>taskAction('tasks/'+row.task_id+'/replace',{expected_review_revision:row.review_revision,expected_document_revision:row.current_document_revision},token,replace,'已建立或找到替代任务，请核对后生成新草稿；旧任务不会重跑。');item.append(replace);}
+ if(row.message){const edit=document.createElement('button');edit.textContent='载入原话重新起草';edit.onclick=()=>{if(context?.context_token!==token)return;$('message').value=row.message;$('conversationNote').value=row.conversation_note||'';notice('已载入原话和备注，请核对资料后生成新草稿。');};item.append(edit);}
+ $('tasks').append(item);}
+ refreshBatchControls();
+}
+$('selectBatch').onclick=()=>{if(batchRun)return;selectedDrafts=new Set([...batchCandidates.keys()].slice(0,10));refreshBatchControls();};
+$('clearBatch').onclick=()=>{if(batchRun)return;selectedDrafts.clear();refreshBatchControls();};
+$('draftBatch').onclick=async()=>{const token=context?.context_token;if(batchRun||!token||!selectedDrafts.size)return;const run={token,ids:[...selectedDrafts],revision};batchRun=run;$('batchOutcome').textContent='正在顺序生成草稿，请等待本批结果。';refreshBatchControls();try{const done=await api('tasks/batch/execute',{task_ids:run.ids,expected_document_revision:run.revision},token);if(context?.context_token!==token||batchRun!==run)return;selectedDrafts.clear();await loadTasks(token);if(context?.context_token!==token||batchRun!==run)return;const summary='本批：'+done.drafted+' 条草稿，'+done.needs_review+' 条需人工处理，'+done.failed+' 条未完成，'+done.remaining_task_ids.length+' 条未继续。'+(done.stopped_code?'已停止，请刷新核对资料、身份和任务状态后再选择。':'请逐条核对草稿后自行发送。');$('batchOutcome').textContent=summary;notice(summary,!!done.stopped_code);}catch(e){if(context?.context_token===token&&batchRun===run){selectedDrafts.clear();handleError(e);if(context?.context_token===token){$('batchOutcome').textContent='本批结果未能完整确认，请核对各条任务及待核对的设置操作；不会自动继续。';try{await loadTasks(token);await loadControls(token);}catch(refreshError){handleError(refreshError);}}}}finally{if(batchRun===run){batchRun=null;refreshBatchControls();}}};
+function appendDraftEditor(item,row,token,copy,effectiveText){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='人工调整草稿';details.append(summary);const hint=document.createElement('p');hint.className='hint';hint.textContent='原稿会保留。请自行核对新增事实、承诺及措辞；保存不会验证内容，也不会发送。';details.append(hint);const label=document.createElement('label');label.textContent='修改后的回复';const editor=document.createElement('textarea');editor.maxLength=8000;editor.value=effectiveText;label.append(editor);details.append(label);const confirmLabel=document.createElement('label');confirmLabel.textContent='我已核对修改内容，确认用于人工回复';const confirmed=document.createElement('input');confirmed.type='checkbox';confirmed.style='width:auto;min-height:auto';confirmLabel.append(confirmed);details.append(confirmLabel);const save=document.createElement('button');save.textContent='保存已核对的人工稿';save.disabled=true;let saving=false;editor.oninput=()=>{confirmed.checked=false;save.disabled=true;copy.disabled=true;};confirmed.onchange=()=>{save.disabled=saving||!confirmed.checked||!editor.value.trim();};save.onclick=async()=>{if(saving||!confirmed.checked||context?.context_token!==token)return;const text=editor.value;saving=true;save.disabled=true;editor.disabled=true;confirmed.disabled=true;copy.disabled=true;try{await api('tasks/'+row.task_id+'/edit',{text,confirmed:true,expected_manual_revision:row.manual_revision||0,expected_document_revision:row.document_revision},token);if(context?.context_token!==token)return;notice('人工稿已保存；原稿与修改历史保留，尚未发送。');await loadTasks(token);}catch(e){if(context?.context_token===token)handleError(e);}finally{saving=false;editor.disabled=false;confirmed.disabled=false;save.disabled=true;confirmed.checked=false;}};details.append(save);item.append(details);}
+function appendEditHistory(item,row,token){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='人工修改记录';details.append(summary);const button=document.createElement('button'),history=document.createElement('div');button.textContent='查看最近 20 次修改';button.onclick=async()=>{button.disabled=true;try{const data=await api('tasks/'+row.task_id+'/edits',undefined,token);if(context?.context_token!==token)return;history.replaceChildren();const total=document.createElement('p');total.textContent='共 '+data.total+' 次人工修改，显示最近 '+data.edits.length+' 次。历史内容请勿直接用于发送。';history.append(total);for(const edit of data.edits){const entry=document.createElement('p');entry.textContent='人工稿版本 '+edit.revision+' · 资料版本 '+edit.document_revision+' · '+new Date(edit.created_at*1000).toLocaleString()+'\n'+edit.text;entry.style='white-space:pre-wrap';history.append(entry);}}catch(e){if(context?.context_token===token)handleError(e);}finally{button.disabled=false;}};details.append(button);details.append(history);item.append(details);}
+function parseManualBatch(text){const rows=[];for(const [index,line] of text.split(/\r?\n/).entries()){if(!line.trim())continue;const split=line.indexOf('|');if(split<1||!line.slice(0,split).trim()||!line.slice(split+1).trim())throw new Error('第 '+(index+1)+' 行格式不正确，请使用：会话备注 | 对方原话');rows.push({conversation_note:line.slice(0,split).trim(),message:line.slice(split+1).trim()});}if(!rows.length||rows.length>50)throw new Error('请录入 1 到 50 条消息。');return rows;}
+$('batchForm').onsubmit=async event=>{event.preventDefault();const token=context?.context_token;if(!token){notice('请先重新加载工作区。',true);return;}const text=$('batchMessages').value;let attempt;try{const items=parseManualBatch(text);if(!batchAttempt||batchAttempt.text!==text||batchAttempt.token!==token)batchAttempt={text,token,key:crypto.randomUUID()};attempt=batchAttempt;$('importBatch').disabled=true;const done=await api('tasks/batch',{items,idempotency_key:attempt.key},token);if(context?.context_token!==token)return;if($('batchMessages').value===text)$('batchMessages').value='';if(batchAttempt===attempt)batchAttempt=null;$('reviewFilter').value='pending';$('stageFilter').value='all';resetTaskSearch(true);notice('已录入 '+done.created+' 条，复用 '+done.reused+' 条；尚未生成或发送。');await loadTasks(token);}catch(e){if(context?.context_token===token)handleError(e);}finally{if(context?.context_token===token)$('importBatch').disabled=false;}};
+$('stageFilter').onchange=()=>{resetTaskSearch();return loadTasks().catch(handleError);};
+$('reviewFilter').onchange=()=>{resetTaskSearch();loadTasks().catch(handleError);};
+$('taskSearchForm').onsubmit=event=>{event.preventDefault();taskQuery=$('taskSearch').value.trim();resetTaskSearch();return loadTasks().catch(handleError);};
+$('clearSearch').onclick=()=>{resetTaskSearch(true);return loadTasks().catch(handleError);};
+async function moveTaskPage(direction){if(taskPageLoading)return;if(direction>0){if(!nextTaskCursor)return;taskCursors=taskCursors.slice(0,taskPage+1);taskCursors.push(nextTaskCursor);taskPage++;}else{if(!taskPage)return;taskPage--;}selectedDrafts.clear();batchCandidates.clear();refreshBatchControls();$('tasks').replaceChildren();try{await loadTasks();}catch(e){handleError(e);}}
+$('previousTasks').onclick=()=>moveTaskPage(-1);
+$('nextTasks').onclick=()=>moveTaskPage(1);
+$('reload').onclick=()=>load().catch(handleError);
+async function loadControls(token=context?.context_token){const rows=await api('recovery',undefined,token);if(context?.context_token!==token)return;
+ $('controlTasks').replaceChildren();$('controlPanel').hidden=!rows.length;
+ const names={'runtime.task.edit':'保存人工稿','runtime.task.batch.execute':'批量生成草稿','runtime.document.save':'保存资料','runtime.switch':'切换工作区','runtime.task.submit':'创建任务','runtime.task.execute':'处理任务','runtime.task.cancel':'取消任务','runtime.task.recover':'核对任务'};
+ for(const row of rows){const item=document.createElement('div');item.className='task';const text=document.createElement('div');text.textContent=(names[row.tool]||'读取或设置操作')+' · '+(row.status==='queued'?'尚未开始':row.status==='executing'?'处理尚未结束':'提交结果待核对');item.append(text);
+ const button=document.createElement('button');button.textContent=row.status==='queued'?'结束未开始的请求':'核对提交结果';button.onclick=async()=>{try{const done=await api('tasks/'+row.task_id+'/recover',{},token);if(context?.context_token!==token)return;notice(done.error_code==='NOT_STARTED'?'请求尚未开始，现已结束，没有执行原操作。':done.error_code==='RECOVERED_COMMIT'?(done.tool==='runtime.task.execute'?'已核对上次处理请求，没有重新执行；请在最近任务中查看草稿处理结果。':'已确认上次操作已提交，没有重新执行；请重新加载工作区查看当前资料。'):done.status==='failed'?'上次读取已中断，没有重新执行。':done.status==='completed'?'操作已完成，请重新加载查看当前资料。':'暂无法确认提交结果，请人工核对，不要重复提交。',done.status==='outcome_unknown');await loadControls(token);}catch(e){handleError(e);}};item.append(button);$('controlTasks').append(item);}
+}
+$('switch').onclick=async()=>{try{const next=await api('context',{role:$('role').value,organization_id:$('organization').value,account_id:$('account').value});clearPrivate();context=next;await load();$('switch').closest('details').open=false;}catch(e){handleError(e);}};
+$('documentForm').onsubmit=async event=>{event.preventDefault();try{const token=context?.context_token;if(!token)throw new Error('请先重新加载工作区。');const content={};for(const key of Object.keys(labels[context.role]))content[key]=$('fact-'+key).value;
+ const doc=await api('document',{content,expected_revision:revision,confirmed:$('confirmed').checked},token);if(context?.context_token!==token)return;revision=doc.revision;draftSnapshot=null;$('reply').textContent='资料已更新，请重新生成草稿。';$('copy').disabled=true;notice('资料已保存。');await loadTasks(token);}catch(e){handleError(e);}};
+$('generate').onclick=async()=>{if(active)return;const token=context?.context_token;if(!token){notice('请先重新加载工作区。',true);return;}const run={token,id:null,cancel:false};active=run;$('generate').disabled=true;$('copy').disabled=true;$('cancel').disabled=false;$('stage').textContent='正在创建任务…';
+ try{const task=await api('tasks',{tool:'draft.reply',input:{message:$('message').value,conversation_note:$('conversationNote').value},idempotency_key:crypto.randomUUID()},token);run.id=task.task_id;if(context?.context_token!==token)return;
+ if(run.cancel){await api('tasks/'+run.id+'/cancel',{},token);$('stage').textContent='已取消任务';return;}
+ $('stage').textContent='正在核对资料并起草…';const done=await api('tasks/'+run.id+'/execute',{},token);if(context?.context_token!==token)return;
+ const result=done.result||{};if(result.text&&result.document_revision!==revision){$('reply').textContent='资料已更新，请重新生成草稿。';$('stage').textContent='等待重新生成';return;}
+ draftSnapshot=result.text?{token,task_id:done.task_id,revision:result.document_revision,text:result.text}:null;$('reply').textContent=result.text||result.reason||states[done.status]||'需人工核对';$('copy').disabled=!result.text;$('stage').textContent=done.status==='completed'?(result.text?'草稿已完成，尚未发送':'请人工处理'):states[done.status]||'需人工核对';$('basis').textContent=result.citations?.length?'依据：'+result.citations.map(x=>labels.recruiter[x]||x).join('、')+' · 资料版本 '+result.document_revision:'';
+ await loadTasks(token);
+ }catch(e){if(context?.context_token===token)handleError(e);}finally{if(active===run){active=null;$('generate').disabled=false;$('cancel').disabled=true;}}
+};
+$('cancel').onclick=async()=>{const run=active;if(!run)return;run.cancel=true;$('stage').textContent='正在请求取消…';if(run.id){try{const done=await api('tasks/'+run.id+'/cancel',{},run.token);if(active===run)$('stage').textContent=states[done.status]||'需人工核对';}catch(e){handleError(e);}}};
+$('copy').onclick=()=>copyChecked(draftSnapshot,$('copy'));
+$('events').onclick=async()=>{try{const token=context?.context_token;const rows=await api('events',undefined,token);if(context?.context_token===token)$('eventLog').textContent=JSON.stringify(rows,null,2);}catch(e){handleError(e);}};
+/* ===== 人工回复闭环（G1）：观察起点 → 预检 → 绑定 → 预占 → 取卡 → 自报 → 回读。全部本机记录，不向平台写入。 ===== */
+const loopText={SEND_RECIPIENT_REQUIRED:'还没有确认发送对象。',SEND_RECIPIENT_CHANGED:'发送对象或资料已经变化，请重新核对。',STALE_SEND_FACTS:'本人资料或浏览器会话已变化，请重新核对。',STALE_MANUAL_DRAFT:'草稿已被修改，请重新核对草稿。',DRAFT_NOT_READY:'草稿还没完成，或者已经被替换。',DRAFT_CHANGED_AFTER_RESERVATION:'预占之后草稿被改过，这张卡不能再用。',MESSAGE_AGE_EXCEEDED:'这条消息超过两分钟没有重新读取，请重新读取会话。',WINDOW_GAP_EXCEEDED:'观察中断超过两分钟，请重建观察起点。',WINDOW_REBUILT:'观察起点已重建，旧预占失效，需要重新准备。',SEND_DAILY_LIMIT_REACHED:'本机当日预占额度已经用完。',SEND_ALREADY_USED:'这条已有自报或回读记录，不能再退额度。',HANDOFF_EXPIRED:'待发卡已过时效，请重新读取会话后准备。',SEND_HANDOFF_REQUIRED:'请先取待发卡，再登记已发送。',INVALID_SEND_ATTEMPT_STATE:'当前状态不允许这个操作。',STALE_REPLY_WINDOW:'观察起点已更新，请重新读取。',REPLY_WINDOW_REQUIRED:'还没有建立消息观察起点。',SEND_ATTEMPT_NOT_FOUND:'找不到这条预占记录。',SEND_HANDOFF_CHANGED:'待发卡与当前草稿不一致，请重新核对。',READBACK_REGRESSION:'已记录的回读证据不会被未命中抹掉。',FRESH_WINDOW_MESSAGES_REQUIRED:'观察起点只接受十秒内的真实读取，请重新读取会话。',FRESH_MESSAGES_REQUIRED:'请先重新读取当前会话消息。',SEND_ATTEMPT_CONFLICT:'同一条回复已有不同对象的预占记录，请人工核对。'};
+const blockerText={STALE_REPLY_CONTEXT:'工作区已经切换',STALE_REPLY_PROFILE:'本人资料已更新',STALE_REPLY_BINDING:'浏览器会话已变化',DRAFT_NOT_READY:'草稿未完成或已被替换',LIVE_MESSAGE_ANCHOR_CHANGED:'页面上这条问题已经变化',REPLY_WINDOW_REQUIRED:'还没建立观察起点',STALE_REPLY_WINDOW:'观察起点与当前资料或会话不一致',WINDOW_GAP_EXCEEDED:'观察中断超过两分钟',MESSAGE_NOT_NEW_AFTER_WINDOW:'这条消息不是观察起点之后新到的'};
+let observationWindow=null,windowRun=null,loopRun=null,queueRun=null,statsRun=null,currentLoop=null,lastRead=null;
+let queueState=null,queueSelection=new Set(),queueCandidates=new Map();
+function loopPhrase(code){return loopText[code]||'这一步没有完成，请重新读取会话后核对。';}
+function loopDevText(code,trace){if(!code){$('loopDev').hidden=true;$('loopDev').textContent='';return;}$('loopDev').hidden=false;$('loopDev').textContent='错误码 '+code+(trace?' · trace '+trace:'')+'（开发信息，日常使用不需要看）。';}
+function sameWorkspace(run){return !!run&&context?.context_token===run.token&&workspaceLoad===run.epoch;}
+function loopButton(label,onClick,primary,disabled){const b=document.createElement('button');b.type='button';b.textContent=label;if(primary)b.className='primary';b.disabled=!!disabled;b.onclick=onClick;return b;}
+function stamp(value){return value?new Date(value*1000).toLocaleString():'—';}
+function paintWindow(){
+ const w=observationWindow;
+ if(!w){$('windowStatus').textContent='尚未读取观察起点。';$('windowDetail').textContent='';}
+ else if(!w.content){$('windowStatus').textContent='还没有建立观察起点：先读取一次会话，再点「建立或重建起点」。';$('windowDetail').textContent='';}
+ else{$('windowStatus').textContent=(w.observation_gap_ok?'两分钟内观察过':'观察已超过两分钟，需要推进或重建')+' · 起点建立于 '+stamp(w.content.started_at)+' · 第 '+w.revision+' 版';
+  $('windowDetail').textContent='起点之后已记录 '+Object.keys(w.content.seen||{}).length+' 条消息。观察不等于自动回复，也不会轮询页面；起点重建会让旧的预占失效。';}
+ $('startWindow').disabled=!lastRead?.traceId||!!windowRun;
+ $('advanceWindow').disabled=!lastRead?.traceId||!w?.content||!!windowRun;
+}
+async function loadWindow(){
+ if(windowRun||context?.role!=='applicant')return;
+ const run={token:context.context_token,epoch:workspaceLoad};windowRun=run;$('refreshWindow').disabled=true;
+ try{const w=await api('applicant/reply-window',undefined,run.token);if(!sameWorkspace(run))return;observationWindow=w;paintWindow();}
+ catch(e){if(sameWorkspace(run)){$('windowStatus').textContent='观察起点未能读取，请核对提示。';handleError(e);}}
+ finally{if(windowRun===run){windowRun=null;$('refreshWindow').disabled=false;paintWindow();}}
+}
+async function updateWindow(advance){
+ const l=lastRead;if(windowRun||!l?.traceId||context?.role!=='applicant')return;
+ if(!observationWindow){$('windowStatus').textContent='请先读取一次当前的观察起点。';return;}
+ const run={token:context.context_token,epoch:workspaceLoad};windowRun=run;$('startWindow').disabled=true;$('advanceWindow').disabled=true;
+ try{
+  const result=await api('applicant/reply-window/'+(advance?'observe':'start'),{message_observation_task_id:l.traceId,expected_revision:observationWindow.revision,expected_profile_revision:l.profileRevision,expected_binding_revision:l.bindingRevision},run.token);
+  if(!sameWorkspace(run))return;
+  observationWindow={...observationWindow,...result};paintWindow();
+  $('windowStatus').textContent=(advance?'已把这次读取并入观察窗口':'已用最近一次读取建立观察起点')+' · 第 '+result.revision+' 版。已预占的记录不受推进影响；重建起点会让旧预占失效。';
+ }catch(e){if(sameWorkspace(run)){$('windowStatus').textContent=loopPhrase(e.code);handleError(e);}}
+ finally{if(windowRun===run){windowRun=null;$('refreshWindow').disabled=false;paintWindow();}}
+}
+function setLoopDraft(draft){
+ currentLoop={token:context?.context_token,epoch:workspaceLoad,preflight:null,recipient:null,attempt:null,handoff:null,claim:null,readback:null,...draft};
+ $('sendLoopPanel').hidden=false;$('sendLoopPanel').open=true;$('loopConfirmed').checked=false;
+ $('loopStatus').textContent='草稿已就绪：下一步先核对，再绑定对象；整个过程不会发送。';
+ loopDevText(null);renderLoop();
+}
+function clearLoop(){
+ observationWindow=null;windowRun=null;loopRun=null;queueRun=null;statsRun=null;currentLoop=null;lastRead=null;
+ queueState=null;queueSelection.clear();queueCandidates.clear();
+ $('sendLoopPanel').hidden=true;$('windowStatus').textContent='尚未读取观察起点。';$('windowDetail').textContent='';
+ $('loopDraftStatus').textContent='先在上方读取会话并准备回复草稿；这里只处理那份草稿。';$('loopSteps').replaceChildren();$('loopCard').replaceChildren();
+ $('loopStatus').textContent='';$('loopConfirmed').checked=false;$('loopConfirmLabel').hidden=true;loopDevText(null);
+ $('queueItems').replaceChildren();$('queueCards').replaceChildren();$('queueStatus').textContent='尚未读取队列。';$('handoffQueue').disabled=true;
+ $('statsBody').replaceChildren();$('statsStatus').textContent='尚未读取统计。';
+ $('outcomeList').replaceChildren();$('outcomeStatus').textContent='尚未读取发送记录。';clearCapacityAlarm();
+ $('refreshWindow').disabled=false;$('startWindow').disabled=true;$('advanceWindow').disabled=true;$('refreshQueue').disabled=false;$('refreshStats').disabled=false;
+}
+function renderLoop(){
+ const box=$('loopSteps');box.replaceChildren();const card=$('loopCard');card.replaceChildren();
+ const l=currentLoop;$('loopConfirmLabel').hidden=!l;
+ if(!l){$('loopDraftStatus').textContent='先在上方读取会话并准备回复草稿；这里只处理那份草稿。';$('loopStatus').textContent='';return;}
+ $('loopDraftStatus').textContent='当前草稿（'+l.text.length+' 字）：'+l.text;
+ const busy=!!loopRun,checked=!!$('loopConfirmed').checked;
+ if(!l.preflight){
+  $('loopStatus').textContent='草稿已就绪。请先核对：这一步会实时读取当前会话，确认发送对象和消息时效。';
+  box.append(loopButton('① 核对草稿与当前会话',()=>runPreflight(),true,busy));return;
+ }
+ const p=l.preflight;
+ if(!p.preflight_passed){
+  $('loopStatus').textContent='还不能继续：'+p.blockers.map(code=>blockerText[code]||code).join('；')+'。请重新读取会话后再核对。';
+  box.append(loopButton('重新核对',()=>runPreflight(),true,busy));return;
+ }
+ if(!l.recipient){
+  const left=Math.max(0,Math.round(p.expires_at-Date.now()/1000));
+  $('loopStatus').textContent='核对通过（约 '+left+' 秒内有效）。请勾选上方确认项，再绑定发送对象。';
+  box.append(loopButton('② 确认发送对象',()=>runRecipient(),true,busy||!checked));return;
+ }
+ if(!l.attempt){
+  $('loopStatus').textContent='发送对象已绑定：'+(l.recipient.party?.display_name||'对方')+'。下一步预占本机额度（不是平台额度，也不会发送）。';
+  box.append(loopButton('③ 预占额度',()=>runReserve(),true,busy||!checked));return;
+ }
+ const attemptId=l.attempt.attempt_id;
+ if(!l.handoff){
+  $('loopStatus').textContent='已预占 1 条（'+l.attempt.state+'）。取待发卡后可复制正文到 BOSS 自己发送；若不再需要可释放预占。';
+  box.append(loopButton('④ 取待发卡',()=>runHandoff(),true,busy));
+  box.append(loopButton('释放这条预占',()=>runRelease('user_cancelled'),false,busy));return;
+ }
+ const handoff=l.handoff;
+ const body=document.createElement('div');body.className='reply';body.textContent=handoff.text;card.append(body);
+ const meta=document.createElement('p');meta.className='hint';meta.textContent='对方：'+(handoff.handoff?.party_display_name||'—')+' · 正文摘要 '+(handoff.handoff?.draft_text_sha256||'').slice(0,12)+'… · '+(handoff.expires_in_seconds>0?('约 '+Math.round(handoff.expires_in_seconds)+' 秒内可登记已发送'):'已过时效');card.append(meta);
+ const copyButton=loopButton('复制正文',async()=>{try{await navigator.clipboard.writeText(handoff.text);notice('正文已复制；请到 BOSS 原生页面粘贴并自己点发送。');}catch{notice('无法访问剪贴板，请手动选中正文复制。',true);}},false,busy);card.append(copyButton);
+ if(!l.claim){
+  $('loopStatus').textContent='复制后到 BOSS 页面自己发送，然后回来登记「已手动发送」。这一步只是自报，不是平台送达。';
+  box.append(loopButton('⑤ 我已复制并手动发送',()=>runClaim(),true,busy));
+  box.append(loopButton('回读核对（只读）',()=>runReadback(false),false,busy));
+  box.append(loopButton('不再发送，释放预占',()=>runRelease('user_cancelled'),false,busy));return;
+ }
+ $('loopStatus').textContent='已登记「已手动发送」（'+(l.claim.note||'自报，非平台确认')+'）。接下来可以回读核对页面是否出现这条消息。';
+ box.append(loopButton('⑥ 回读核对（只读探测）',()=>runReadback(false),false,busy));
+ box.append(loopButton('回读并记录结果',()=>runReadback(true),true,busy));
+ if(l.readback){
+  const result=document.createElement('p');result.className='hint';
+  result.textContent=l.readback.committed?('回读证据已记录：'+(l.readback.readback?.observed?'页面上出现了本次正文'+(l.readback.readback?.ambiguous?'（多处匹配，保留歧义）':''):'没有找到本次正文')+'；仍不等于平台送达确认。'):('回读结果：'+(l.readback.readback_observed?'页面上出现了本次正文':'没有找到本次正文')+(l.readback.evidence?.ambiguous?'（多处匹配，保留歧义）':'')+'。未写入账本。');
+  card.append(result);
+ }
+}
+async function runPreflight(){
+ const l=currentLoop;if(!l||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const p=await api('applicant/replies/'+l.intentId+'/preflight',{expected_manual_revision:l.manualRevision},l.token);if(!sameWorkspace(run))return;
+  currentLoop={...currentLoop,preflight:p};loopDevText(null);
+  $('loopStatus').textContent=p.preflight_passed?'核对通过。':'核对未通过，请按提示重新读取会话。';
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;renderLoop();}}
+}
+async function runRecipient(){
+ const l=currentLoop;if(!l?.preflight?.preflight_passed||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const saved=await api('applicant/send/recipient/confirm',{intent_id:l.intentId,expected_manual_revision:l.manualRevision,expected_profile_revision:l.preflight.profile_revision,expected_binding_revision:l.preflight.binding_revision,expected_window_revision:l.preflight.window_revision,confirmed:true},l.token);
+  if(!sameWorkspace(run))return;currentLoop={...currentLoop,recipient:saved.recipient};loopDevText(null);
+  $('loopStatus').textContent=saved.created?'发送对象已绑定（不可变；对象或资料变化会被拒绝）。':'已存在同一份绑定，没有重复写入。';
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;$('loopConfirmed').checked=false;renderLoop();}}
+}
+async function runReserve(){
+ const l=currentLoop;if(!l?.recipient||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const saved=await api('applicant/send/reserve',{intent_id:l.intentId,recipient_binding_id:l.recipient.recipient_fingerprint,expected_manual_revision:l.manualRevision,expected_profile_revision:l.preflight.profile_revision,expected_binding_revision:l.preflight.binding_revision,expected_window_revision:l.preflight.window_revision,confirmed:true},l.token);
+  if(!sameWorkspace(run))return;currentLoop={...currentLoop,attempt:saved.attempt};loopDevText(null);
+  $('loopStatus').textContent=(saved.created?'已预占 1 条本机额度':'这条意图已有预占，沿用原记录')+'；当日剩余 '+saved.budget.remaining+' 条（本机账本，不是平台额度）。';
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;$('loopConfirmed').checked=false;renderLoop();}}
+}
+async function runHandoff(){
+ const l=currentLoop;if(!l?.attempt||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const card=await api('applicant/send/handoff',{attempt_id:l.attempt.attempt_id,confirmed:true},l.token);
+  if(!sameWorkspace(run))return;currentLoop={...currentLoop,handoff:card};loopDevText(null);loadQueue();loadStats();
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;renderLoop();}}
+}
+async function runClaim(){
+ const l=currentLoop;if(!l?.attempt||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const saved=await api('applicant/send/manual/claim',{attempt_id:l.attempt.attempt_id,confirmed:true},l.token);
+  if(!sameWorkspace(run))return;currentLoop={...currentLoop,claim:saved.claim};loopDevText(null);loadQueue();loadStats();
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;renderLoop();}}
+}
+async function runRelease(reason){
+ const l=currentLoop;if(!l?.attempt||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const done=await api('applicant/send/release',{attempt_id:l.attempt.attempt_id,reason,confirmed:true},l.token);
+  if(!sameWorkspace(run))return;currentLoop={...currentLoop,attempt:done.attempt,handoff:null,claim:null,readback:null};loopDevText(null);
+  $('loopStatus').textContent='已释放这条预占，额度回到当日余额（'+done.budget.remaining+' 条）。没有发送任何内容。';loadQueue();loadStats();
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;renderLoop();}}
+}
+async function runReadback(commit){
+ const l=currentLoop;if(!l?.attempt||loopRun)return;
+ const run={token:l.token,epoch:l.epoch};loopRun=run;renderLoop();
+ try{const probe=await api('applicant/send/readback'+(commit?'/commit':''),{attempt_id:l.attempt.attempt_id},l.token);
+  if(!sameWorkspace(run))return;
+  currentLoop={...currentLoop,readback:commit?{...probe,committed:true}:probe};loopDevText(null);
+  $('loopStatus').textContent=commit?'回读结果已记录（仍不等于平台送达确认）。':'回读是只读探测，没有写入账本。';loadStats();
+ }catch(e){if(sameWorkspace(run)){$('loopStatus').textContent=loopPhrase(e.code);loopDevText(e.code);handleError(e);}}
+ finally{if(loopRun===run){loopRun=null;renderLoop();}}
+}
+function renderQueue(){
+ const box=$('queueItems'),cards=$('queueCards');box.replaceChildren();cards.replaceChildren();queueCandidates.clear();
+ const data=queueState;
+ if(!data){$('queueStatus').textContent='尚未读取队列。';$('handoffQueue').disabled=true;return;}
+ if(!data.items.length){$('queueStatus').textContent='当前没有已预占、待取卡的记录。';$('handoffQueue').disabled=true;return;}
+ $('queueStatus').textContent='共 '+data.count+' 条预占，单批最多 '+data.queue_limit+' 条。不可交接的项也列在这里。';
+ for(const item of data.items){
+  const row=document.createElement('div');row.className='task';
+  const head=document.createElement('strong');head.textContent=(item.party_display_name||'未命名对象')+' · '+item.attempt_id.slice(0,8)+'…';row.append(head);
+  const state=document.createElement('p');state.textContent=item.ready?'可以取卡':('暂不能取卡：'+(blockerText[item.reason]||loopPhrase(item.reason))+(item.detail?'（'+item.detail+'）':''));
+  row.append(state);
+  const facts=document.createElement('p');facts.className='hint';facts.textContent=(item.expires_at?(item.expired?'已过时效（'+stamp(item.expires_at)+'）':'时效至 '+stamp(item.expires_at)+'（约剩 '+Math.round(item.expires_in_seconds||0)+' 秒）'):'时效未知')+(item.has_handoff?' · 已取过卡':'')+(item.claimed?' · 已自报':'');
+  row.append(facts);
+  if(item.ready){const label=document.createElement('label'),box2=document.createElement('input');box2.type='checkbox';box2.style='width:auto;min-height:auto';label.textContent='选中取卡';label.append(box2);
+   box2.onchange=()=>{if(box2.checked){if(queueSelection.size>=data.queue_limit){box2.checked=false;notice('单批最多选择 '+data.queue_limit+' 条。',true);return;}queueSelection.add(item.attempt_id);}else queueSelection.delete(item.attempt_id);refreshQueueButtons();};
+   queueCandidates.set(item.attempt_id,box2);row.append(label);
+  }
+  box.append(row);
+ }
+ refreshQueueButtons();
+}
+function refreshQueueButtons(){
+ for(const [id,box] of queueCandidates)box.checked=queueSelection.has(id);
+ queueSelection=new Set([...queueSelection].filter(id=>queueCandidates.has(id)));
+ $('handoffQueue').disabled=!!queueRun||!queueSelection.size;
+}
+async function loadQueue(){
+ if(queueRun||context?.role!=='applicant')return;
+ const run={token:context.context_token,epoch:workspaceLoad};queueRun=run;$('refreshQueue').disabled=true;
+ try{const data=await api('applicant/send/queue',undefined,run.token);if(!sameWorkspace(run))return;queueState=data;renderQueue();}
+ catch(e){if(sameWorkspace(run)){$('queueStatus').textContent='队列未能读取，请核对提示。';handleError(e);}}
+ finally{if(queueRun===run){queueRun=null;$('refreshQueue').disabled=false;refreshQueueButtons();}}
+}
+async function handoffSelected(){
+ if(queueRun||!queueSelection.size||context?.role!=='applicant')return;
+ const ids=[...queueSelection];const run={token:context.context_token,epoch:workspaceLoad};queueRun=run;$('handoffQueue').disabled=true;
+ try{const data=await api('applicant/send/queue/handoff',{attempt_ids:ids,confirmed:true},run.token);
+  if(!sameWorkspace(run))return;
+  const box=$('queueCards');box.replaceChildren();
+  const summary=document.createElement('p');summary.textContent='本批成功 '+data.ok_count+' 条，未完成 '+data.skipped_count+' 条'+(data.partial?'（部分失败）':'')+'。';
+  box.append(summary);
+  for(const card of data.cards){
+   const item=document.createElement('div');item.className='task';const head=document.createElement('strong');head.textContent=(card.handoff?.party_display_name||'未命名对象');item.append(head);
+   const body=document.createElement('div');body.className='reply';body.textContent=card.text;item.append(body);
+   const copy=loopButton('复制正文',async()=>{try{await navigator.clipboard.writeText(card.text);notice('正文已复制；请在 BOSS 页面自己发送。');}catch{notice('无法访问剪贴板，请手动复制。',true);}});item.append(copy);
+   const note=document.createElement('p');note.className='hint';note.textContent='未发送。复制后到 BOSS 页面发送，再回到上方登记结果。';item.append(note);
+   box.append(item);
+  }
+  for(const skip of data.skipped){
+   const item=document.createElement('p');item.className='hint';item.textContent='未取到卡：'+skip.attempt_id.slice(0,8)+'… · '+(blockerText[skip.code]||loopPhrase(skip.code))+' · '+skip.message;box.append(item);
+  }
+  $('queueStatus').textContent='已取卡 '+data.ok_count+' 条'+(data.skipped_count?'，剩余 '+data.skipped_count+' 条需要按原因重新读取会话':'')+'。没有发送任何内容。';
+  queueSelection.clear();loadQueue();loadStats();
+ }catch(e){if(sameWorkspace(run)){$('queueStatus').textContent=loopPhrase(e.code);handleError(e);}}
+ finally{if(queueRun===run){queueRun=null;$('refreshQueue').disabled=false;refreshQueueButtons();}}
+}
+async function loadStats(){
+ if(statsRun||context?.role!=='applicant')return;
+ const run={token:context.context_token,epoch:workspaceLoad};statsRun=run;$('refreshStats').disabled=true;
+ try{const data=await api('applicant/send/stats',undefined,run.token);if(!sameWorkspace(run))return;
+  const box=$('statsBody');box.replaceChildren();
+  const totals=data.totals;
+  const line=document.createElement('p');line.textContent='预占 '+totals.attempts+' 条 · 取卡 '+totals.handoffs+' 条 · 自报 '+totals.claims+' 条 · 回读命中 '+totals.readback_hits+' 条（歧义 '+totals.readback_ambiguous+' 条）。';
+  box.append(line);
+  const states2=document.createElement('p');states2.className='hint';states2.textContent='按状态：'+Object.entries(totals.by_state).map(([k,v])=>k+' '+v).join(' · ');
+  box.append(states2);
+  const rate=document.createElement('p');rate.className='hint';rate.textContent='交接卡到回读命中率：'+(totals.handoff_to_readback_rate==null?'样本不足':(totals.handoff_to_readback_rate*100).toFixed(1)+'%')+'。'+(data.limits?.sample_warning||'')+' 这是本机账本口径，不是平台送达率或已读率。';
+  box.append(rate);
+  const recent=document.createElement('p');recent.className='hint';recent.textContent='最近记录：'+(data.items.slice(-5).reverse().map(item=>item.attempt_id.slice(0,8)+'… '+item.state+(item.claimed?'/自报':'')+(item.readback_observed?'/回读命中':'')).join(' · ')||'暂无')+(data.truncated?'（更早的 '+data.truncated+' 条未显示）':'');
+  box.append(recent);
+  $('statsStatus').textContent='统计已更新（本机账本，不连接平台）。';
+ }catch(e){if(sameWorkspace(run)){$('statsStatus').textContent='统计未能读取，请核对提示。';handleError(e);}}
+ finally{if(statsRun===run){statsRun=null;$('refreshStats').disabled=false;}}
+}
+$('refreshWindow').onclick=()=>loadWindow();
+$('startWindow').onclick=()=>updateWindow(false);
+$('advanceWindow').onclick=()=>updateWindow(true);
+$('loopConfirmed').onchange=()=>renderLoop();
+$('refreshQueue').onclick=()=>loadQueue();
+$('handoffQueue').onclick=()=>handoffSelected();
+$('refreshStats').onclick=()=>loadStats();
+/* ===== 发送结果核对（本机台账）：只登记人工结论，不重发、不推断送达 ===== */
+let outcomeRun=null;
+const outcomeText={SEND_OUTCOME_UNRESOLVED:'上一条发送结果还没核对，先核对完再发。',SEND_LEDGER_IN_FLIGHT:'这条正处在点击过程中，现在不能给结论。',SEND_VERIFY_TARGET_MISMATCH:'当前打开的对话不是这条记录的对象，先切回去再核对。',SEND_LEDGER_ENTRY_NOT_FOUND:'找不到这条发送记录。',SEND_LEDGER_ALREADY_CLOSED:'这条已经核对过了。',SEND_STABLE_TARGET_REQUIRED:'这个对象没有可证明的稳定标识，只能出草稿由你手动发送。',SEND_TARGET_ALREADY_CONTACTED:'这个对象已经有联系记录，不再重复发送。',SEND_TARGET_UNRESOLVED:'这个对象上次的结果没核对清楚，先核对。',SEND_RESOLUTION_BY_REQUIRED:'核对必须留下核对人。',INVALID_ACTION_REQUEST:'核对参数不完整，请重新读取后再试。'};
+function outcomePhrase(code){return outcomeText[code]||'这一步没有完成，请重新读取后核对。';}
+/* 台账容量报警：保护集（已联系 / 未决证据）超上限时不静默丢弃，必须让人看见并归档。
+   说的是「证据已满、需人工归档」，不是「某条消息发送出了问题」—— 两者处理方式完全不同。 */
+function clearCapacityAlarm(){$('capacityAlarm').replaceChildren();$('capacityAlarm').hidden=true;}
+function paintCapacity(capacity){
+ const box=$('capacityAlarm');box.replaceChildren();box.className='alarm';
+ const data=capacity&&typeof capacity==='object'?capacity:null;
+ if(!data||data.overflow!==true){box.hidden=true;return;}
+ const count=Number.isInteger(data.overflow_count)&&data.overflow_count>0?data.overflow_count:0;
+ const kept=Number.isInteger(data.protected)?data.protected:'—';
+ const limit=Number.isInteger(data.protected_limit)?data.protected_limit:'—';
+ const title=document.createElement('strong');
+ title.textContent='台账保护集已超容量上限，需要人工归档（超出 '+count+' 条）。';
+ const detail=document.createElement('p');
+ detail.textContent='已联系证据与未决记录（保护集）现有 '+kept+' 条，上限 '+limit+' 条。台账不会自动删除这些记录：归档之前，同一对象仍然拦住重复发送；这只是「证据已满、要人工归档」，不代表某条消息没发出去，也不能据此判断对方是否看到。';
+ box.append(title,detail);box.hidden=false;
+}
+function paintOutcome(data){
+ const items=(data&&data.blocking)||[];
+ const box=$('outcomeList');box.textContent='';
+ paintCapacity(data&&data.capacity);
+ if(!items.length){$('outcomeStatus').textContent='当前没有待核对的发送记录。';return;}
+ $('outcomeStatus').textContent='有 '+items.length+' 条发送结果还没核对。核对之前，真实发送会被挡住。';
+ items.forEach(item=>{
+  const row=document.createElement('div');row.className='panel';
+  const t=document.createElement('p');
+  t.textContent='记录 '+(item.ledger_id||'').slice(0,12)+' · 状态 '+(item.state||'')+' · 动作 '+(item.action||'')+' · 时间 '+stamp(item.ts);
+  const hint=document.createElement('p');hint.className='hint';
+  hint.textContent=item.state==='submitting'?'这条还在点击过程中，现在不能给结论。':'回到原对话确认这条消息到底发出去了没有，再回来登记结论。';
+  const actions=document.createElement('div');actions.className='actions';
+  if(item.state!=='submitting'){
+   const ok=document.createElement('button');ok.type='button';ok.textContent='确认已发出';ok.onclick=()=>resolveOutcome(item.ledger_id,'delivered',ok);
+   const no=document.createElement('button');no.type='button';no.textContent='确认没发出';no.onclick=()=>resolveOutcome(item.ledger_id,'not_delivered',no);
+   actions.append(ok,no);
+  }
+  row.append(t,hint,actions);box.append(row);
+ });
+}
+async function loadOutcome(){
+ if(!context)return;
+ const run={token:context.context_token,epoch:workspaceLoad};outcomeRun=run;$('refreshOutcome').disabled=true;
+ try{const data=await api('applicant/chat/outcome');if(sameWorkspace(run))paintOutcome(data);}
+ catch(e){if(sameWorkspace(run))$('outcomeStatus').textContent=outcomePhrase(e.code);}
+ finally{if(outcomeRun===run){outcomeRun=null;$('refreshOutcome').disabled=false;}}
+}
+async function resolveOutcome(ledgerId,resolution,button){
+ if(!context)return;
+ button.disabled=true;
+ try{await api('applicant/chat/outcome/resolve',{ledger_id:ledgerId,resolution:resolution,confirmed_by:context.account_id});await loadOutcome();}
+ catch(e){button.disabled=false;$('outcomeStatus').textContent=outcomePhrase(e.code);}
+}
+$('refreshOutcome').onclick=()=>loadOutcome();
+/* ===== 运行开关：只停自动回复，招呼与人工操作照常 ===== */
+let runStateRun=null,currentRunState=null;
+function paintRunState(data){
+ currentRunState=data||null;
+ const paused=!!(data&&data.operations_paused);
+ $('pauseReply').disabled=paused;$('resumeReply').disabled=!paused;
+ const pending=(data&&data.unresolved_count)||0;
+ $('runStateStatus').textContent=paused
+  ?'自动回复已暂停（运行版本 '+(data.generation||0)+'，操作人 '+(data.paused_by||'—')+'）。招呼不受影响，人工填框与手工发送照常；还有 '+pending+' 条发送待核对。'
+  :'自动回复运行中；还有 '+pending+' 条发送待核对。';
+}
+async function loadRunState(){
+ if(!context)return;
+ const run={token:context.context_token,epoch:workspaceLoad};runStateRun=run;$('refreshRunState').disabled=true;
+ try{const data=await api('run');if(sameWorkspace(run))paintRunState(data);}
+ catch(e){if(sameWorkspace(run))$('runStateStatus').textContent='读不到运行开关，按自动回复已暂停处理。';}
+ finally{if(runStateRun===run){runStateRun=null;$('refreshRunState').disabled=false;}}
+}
+async function setReplyPaused(pause){
+ if(!context)return;
+ $('pauseReply').disabled=true;$('resumeReply').disabled=true;
+ try{
+  const payload={confirmed:true,paused_by:context.account_id};
+  if(!pause){payload.action='reply';if(currentRunState&&typeof currentRunState.generation==='number')payload.expected_generation=currentRunState.generation;}
+  const data=await api(pause?'run/pause':'run/resume',payload);
+  paintRunState(data);
+ }catch(e){
+  $('runStateStatus').textContent=(e.code==='RUN_STALE_GENERATION'?'这条记录已被别的操作改过，请重新读取运行开关。':'这一步没有完成，请重新读取运行开关后重试。');
+  await loadRunState();
+ }
+}
+$('refreshRunState').onclick=()=>loadRunState();
+$('pauseReply').onclick=()=>setReplyPaused(true);
+$('resumeReply').onclick=()=>setReplyPaused(false);
+function initSendLoop(){if(context?.role!=='applicant')return;$('sendLoopPanel').hidden=false;loadWindow();}
+/* Bounded search: persisted snapshots only; collection stays in the local CLI. */
+let jobSearchRun=null;
+const jobSearchReasons={SALARY_TOO_LOW:'薪资低于你的下限',KEYWORD_MISMATCH:'职位与关键词不匹配',CITY_MISMATCH:'城市不在求职范围内',EXCLUDED_TERM:'命中不考虑的岗位或公司词语',EDUCATION_MISMATCH:'学历要求不匹配',EXPERIENCE_MISMATCH:'工作经验要求不匹配'};
+const jobSearchStops={COMBOS_DONE:'计划的组合都读完了',LIMIT_SECONDS:'已到本次采集时长上限',ACCOUNT_RISK:'平台出现安全验证，本轮已停止，请人工处理',AUTH_REQUIRED:'平台需要登录，本轮已停止，请在平台人工登录',BROWSER_UNAVAILABLE:'本机浏览器不可用，本轮已停止，请人工检查连接',USER_STOPPED:'已手动停止'};
+function clearJobSearch(){
+ jobSearchRun=null;$('jobSearchPanel').hidden=true;$('jobSearchPanel').open=false;
+ $('jobSearchRefresh').disabled=false;$('jobSearchStatus').textContent='还没有搜索记录';
+ $('jobSearchCounts').textContent='';$('jobSearchCombos').replaceChildren();$('jobSearchCandidates').replaceChildren();$('jobSearchEmpty').textContent='';
+ $('jobSearchNavigation').hidden=true;$('jobSearchCommand').textContent='';$('jobSearchCopy').disabled=false;
+ $('jobSearchDev').open=false;$('jobSearchDebug').textContent='';
+}
+function renderJobSearch(data){
+ const state=data.state,rows=data.candidates||[];
+ $('jobSearchCombos').replaceChildren();$('jobSearchCandidates').replaceChildren();
+ $('jobSearchNavigation').hidden=true;$('jobSearchCommand').textContent='';
+ $('jobSearchDebug').textContent=JSON.stringify({stop_reason:state?.stop_reason??null,plan_revision:state?.plan_revision??null,counts:state?.counts??null,limits:state?.limits??null,stale:data.stale??false,reason_codes:rows.map(job=>({job_id:job.job_id,reason_codes:job.reason_codes}))},null,2);
+ if(data.status==='not_started'){$('jobSearchStatus').textContent='还没有搜索记录';$('jobSearchCounts').textContent='';$('jobSearchEmpty').textContent='尚未开始采集，不代表平台没有岗位。';return;}
+ if(data.status!=='ok'||!state||!Array.isArray(state.combos)||!Array.isArray(data.candidates)||!state.counts||!data.decision_counts)throw new Error('搜索快照不完整');
+ const counts=state.counts,decisions=data.decision_counts;
+ $('jobSearchStatus').textContent=state.status==='running'?'正在采集：第 '+counts.pages_read+' 页，已收 '+counts.jobs+' 条':state.stop_reason==='LIMIT_JOBS'?'已到本次上限 '+counts.jobs+' 条':jobSearchStops[state.stop_reason]||'本轮采集已停止，结束原因需人工核对';
+ if(counts.failed_pages)$('jobSearchStatus').textContent+='；有 '+counts.failed_pages+' 页读取失败，读取失败不代表没有岗位';
+ if(data.stale)$('jobSearchStatus').textContent+='；求职方案已更新，以下是旧方案的采集记录，请按当前方案重新核对';
+ $('jobSearchCounts').textContent='可联系 '+decisions.eligible+' / 待核对 '+decisions.needs_review+' / 已排除 '+decisions.rejected+' / 共采集 '+counts.jobs;
+ const comboText={pending:state.status==='running'?'等待采集':'已停止，未读完',done:'已到本组合页数上限',empty:'页面明确显示暂无岗位',duplicate_pages:'连续没有新增岗位，已停止本组合',schema_changed:'页面结构变化，读取失败，需人工核对'};
+ for(const combo of state.combos){const item=document.createElement('li');item.textContent=combo.city+' · '+combo.keyword+' · 已读 '+combo.pages+' 页 · 新增 '+combo.new_jobs+' 条 · '+(comboText[combo.status]||'状态待核对');$('jobSearchCombos').append(item);}
+ $('jobSearchEmpty').textContent=rows.length?'':'本次快照共采集 '+counts.jobs+' 条，当前没有候选可展示；请结合上方停止原因和读取失败情况核对，不能据此断言平台没有岗位。';
+ for(const job of rows){
+  const row=document.createElement('tr');
+  const values=[{eligible:'可联系',needs_review:'待人工核对',rejected:'已排除'}[job.decision]||'待人工核对',job.job_id,job.title,job.company,job.city,job.salary,(job.reason_codes||[]).map(code=>jobSearchReasons[code]||'其他筛选原因，请人工核对').join('；')||'未记录排除理由',(job.needs||[]).join('；')||'无已列出的待核对项'];
+  for(const value of values){const cell=document.createElement('td');cell.textContent=value||'—';cell.style='padding:8px;overflow-wrap:anywhere';row.append(cell);}
+  $('jobSearchCandidates').append(row);
+ }
+ if(state.navigation_required){
+  $('jobSearchNavigation').hidden=false;
+  if(state.next?.city&&state.next?.keyword){
+   const quote=value=>"'"+String(value).replace(/'/g,"'\"'\"'")+"'";
+   $('jobSearchCommand').textContent='python main.py job-search --city '+quote(state.next.city)+' --keyword '+quote(state.next.keyword)+' --pages 3';
+  }else $('jobSearchCommand').textContent='下一个组合信息不完整，请人工检查命令行记录。';
+  $('jobSearchCopy').disabled=!state.next?.city||!state.next?.keyword;
+ }
+}
+async function refreshJobSearch(){
+ if(jobSearchRun||context?.role!=='applicant')return;
+ const run={token:context.context_token,epoch:workspaceLoad};jobSearchRun=run;$('jobSearchRefresh').disabled=true;
+ const current=()=>jobSearchRun===run&&sameWorkspace(run);
+ $('jobSearchStatus').textContent='正在读取本机搜索记录…';
+ try{const data=await api('applicant/jobs/search/get',{include_candidates:true},run.token);if(!current())return;renderJobSearch(data);}
+ catch(error){if(current()){
+  $('jobSearchCombos').replaceChildren();$('jobSearchCandidates').replaceChildren();$('jobSearchCounts').textContent='';$('jobSearchEmpty').textContent='';$('jobSearchNavigation').hidden=true;$('jobSearchCommand').textContent='';
+  $('jobSearchStatus').textContent='搜索记录未能读取，请刷新或重新加载工作区；不代表没有岗位。';
+  $('jobSearchDebug').textContent=JSON.stringify({code:error.code||null,message:error.message},null,2);
+  if(error.code==='STALE_CONTEXT')handleError({code:error.code,message:'工作区身份已变化，请重新加载。'});
+ }}finally{if(jobSearchRun===run){jobSearchRun=null;$('jobSearchRefresh').disabled=false;}}
+}
+$('jobSearchRefresh').onclick=()=>refreshJobSearch();
+$('jobSearchCopy').onclick=async()=>{
+ const run={token:context?.context_token,epoch:workspaceLoad},command=$('jobSearchCommand').textContent;
+ if(context?.role!=='applicant'||$('jobSearchNavigation').hidden||$('jobSearchCopy').disabled||!command)return;
+ try{await navigator.clipboard.writeText(command);if(sameWorkspace(run))notice('命令已复制，尚未执行；请在项目目录的 Git Bash 中人工运行。');}catch{if(sameWorkspace(run))notice('无法访问剪贴板，请选中命令手动复制。',true);}
+};
+function initJobSearch(){if(context?.role!=='applicant')return;$('jobSearchPanel').hidden=false;refreshJobSearch();}
+load().catch(handleError);
+</script></body></html>

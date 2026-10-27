@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>受控沟通页（本地验收，不连接任何平台）</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; color: #222; }
+  h1 { font-size: 18px; }
+  .note { background: #fff8e1; border: 1px solid #e6c96b; padding: 10px 12px; font-size: 13px; }
+  #message-list { border: 1px solid #ddd; min-height: 120px; padding: 10px; margin: 12px 0; }
+  #message-list .msg { padding: 4px 0; border-bottom: 1px dashed #eee; font-size: 14px; }
+  #compose-textarea { width: 100%; height: 84px; box-sizing: border-box; }
+  #send-button { margin-top: 8px; padding: 6px 18px; }
+  #status { font-size: 12px; color: #666; margin-top: 8px; }
+</style>
+</head>
+<body>
+<h1>受控沟通页 · 本地验收</h1>
+<p class="note">这是本机回环页面，只用于验证「填入 → 提交 → 观察回显」的执行协议与六态结果。它不连接 BOSS，不含任何真实账号数据；页面上的选择器由本机固定，不作为平台选择器证据。</p>
+<div id="target" data-job-id="controlled-job-1" data-company="受控公司">目标：受控公司 · 受控岗位（受控公司）</div>
+<div id="message-list"></div>
+<textarea id="compose-textarea" placeholder="受控说明：这里模拟输入框"></textarea>
+<button id="send-button" type="button">发送（受控）</button>
+<div id="status">idle</div>
+<script>
+(function () {
+  var list = document.getElementById('message-list');
+  var box = document.getElementById('compose-textarea');
+  var btn = document.getElementById('send-button');
+  var status = document.getElementById('status');
+  // 故障注入：?fail=submit 模拟提交后无回显；?fail=crash 模拟提交后页面失联
+  var params = new URLSearchParams(location.search);
+  var fail = params.get('fail') || '';
+  // 目标核对场景：展示另一个目标，用于验证「提交前核对目标」是否真的生效
+  var job = params.get('job') || '', company = params.get('company') || '';
+  var target = document.getElementById('target');
+  if (job) { target.setAttribute('data-job-id', job); }
+  if (company) {
+    target.setAttribute('data-company', company);
+    target.textContent = '目标：' + company + ' · 受控岗位（' + company + '）';
+  }
+  window.__controlled = { submitted: 0, filled: 0, lastText: null, fail: fail };
+
+  function add(text, who) {
+    var div = document.createElement('div');
+    div.className = 'msg';
+    div.setAttribute('data-from', who);
+    div.textContent = text;
+    list.appendChild(div);
+  }
+  add('（受控）对方历史消息：您好，请介绍一下自己。', 'peer');
+  // 旧消息场景：预置一条己方历史消息，观察逻辑不得把它当成新回显
+  if (params.get('preset') === 'mine') { add('（受控）我方更早的一条消息', 'me'); }
+
+  btn.addEventListener('click', function () {
+    var text = box.value;
+    if (!text.trim()) { status.textContent = 'empty'; return; }
+    window.__controlled.submitted += 1;
+    window.__controlled.lastText = text;
+    box.value = '';
+    status.textContent = 'submitted';
+    if (fail === 'crash') { document.body.setAttribute('data-crashed', '1'); return; }
+    if (fail === 'submit') { return; }
+    setTimeout(function () { add(text, 'me'); status.textContent = 'echoed'; }, 60);
+  });
+  box.addEventListener('input', function () { window.__controlled.filled += 1; });
+})();
+</script>
+</body>
+</html>
