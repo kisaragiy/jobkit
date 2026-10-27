@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS runtime_tasks (
     superseded_by_task_id TEXT,
     manual_text TEXT,
     manual_revision INTEGER NOT NULL DEFAULT 0,
+    conversation_key TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
     UNIQUE(scope_id,idempotency_key)
@@ -310,7 +311,9 @@ def _migrate(c: sqlite3.Connection) -> None:
                                 ("review_status", "TEXT NOT NULL DEFAULT 'pending'"),
                                 ("review_revision", "INTEGER NOT NULL DEFAULT 0"),
                                 ("supersedes_task_id", "TEXT"), ("superseded_by_task_id", "TEXT"),
-                                ("manual_text", "TEXT"), ("manual_revision", "INTEGER NOT NULL DEFAULT 0")):
+                                ("manual_text", "TEXT"), ("manual_revision", "INTEGER NOT NULL DEFAULT 0"),
+                                # 空串 = 升级前的记录，按默认会话键（legacy）读。
+                                ("conversation_key", "TEXT NOT NULL DEFAULT ''")):
         if runtime_columns and column not in runtime_columns:
             c.execute(f"ALTER TABLE runtime_tasks ADD COLUMN {column} {declaration}")
     # 预占必须固定观察代次：重建观察起点后，旧预占既不能续期，也不能再取卡。

@@ -44,6 +44,10 @@ class AnchorMismatch(WindowStoreError):
     code = 'WINDOW_ANCHOR_CHANGED'
 
 
+class MissingError(WindowStoreError):
+    code = 'WINDOW_REQUIRED'
+
+
 def valid_key(value):
     """A conversation key is opaque but strict: 1..128 printable ASCII, no whitespace.
 
@@ -137,6 +141,20 @@ def get(container, key):
 
 def expired(record, now):
     return now > record['expires_at']
+
+
+def require(container, key, now):
+    """The key's own live window, or a typed refusal.
+
+    A key that carries no window is not a session this build may write to: the answer is a
+    refusal, never a silent fall-back to another key's window.
+    """
+    record = get(container, key)
+    if record is None:
+        raise MissingError('该会话键还没有消息观察起点。')
+    if expired(record, now):
+        raise ExpiredError('会话观察窗口已过期，请重新建立观察起点。')
+    return record
 
 
 def prune(container, now):

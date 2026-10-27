@@ -72,6 +72,7 @@ try {
         'test_check_install',
         'test_scripts_encoding',
         'test_reply_windows',
+        'test_reply_multi_session',
         'test_concurrency_probe',
         'test_execution_names',
         'test_applicant_action',

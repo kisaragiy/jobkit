@@ -31,7 +31,7 @@ import applicant_reply_windows
 import applicant_send
 import math
 from copy import deepcopy
-from execution_engine import check_context, check_manual_draft, public_task, record_commit
+from execution_engine import check_context, check_manual_draft, check_conversation_key, public_task, record_commit
 from sandbox import KernelError
 from tool_router import Tool
 from workspace_records import validate_record_graph, MAX_BYTES as EXPORT_MAX_BYTES, MAX_TASKS as EXPORT_MAX_TASKS, MAX_EDITS as EXPORT_MAX_EDITS
@@ -872,9 +872,32 @@ def applicant_conversation_open(payload,context):
     return result
 
 
+def reply_window_fence(c,context,payload,snapshot,key):
+    """草稿只能落在自己的会话窗口上。
+
+    键的形状由 ``window_key`` 校验，窗口的存在与过期由 ``applicant_reply_windows`` 校验——这里
+    只把两者接到一起，不另写一套规则。未指定会话键的旧调用方保持原有行为（升级前的页面只有
+    默认窗口，多要求一步会把它们全部拒掉）。
+    """
+    if 'conversation_key' not in payload:
+        return key
+    try:
+        record=applicant_reply_windows.require(applicant_reply_window.container_of(
+            store.runtime_document(c,context['scope_id'],applicant_reply_window.KIND)),key,time.time())
+    except applicant_reply_windows.MissingError:
+        raise KernelError('REPLY_WINDOW_REQUIRED','该会话还没有消息观察起点，请先读取消息并建立观察起点。') from None
+    except applicant_reply_windows.ExpiredError:
+        raise KernelError('WINDOW_EXPIRED','该会话的观察窗口已过期，请重新建立观察起点后再准备草稿。') from None
+    except applicant_reply_windows.WindowStoreError:
+        raise KernelError('INVALID_REPLY_WINDOW','消息观察边界记录无法完整核对。') from None
+    if record['window'].get('party')!=snapshot['party']:
+        raise KernelError('WINDOW_PARTY_MISMATCH','这次读取的会话与观察窗口对不上，未准备草稿；同名 HR 请用不同的会话键。')
+    return key
+
+
 def observed_reply_source(c,context,payload):
     applicant_only(context)
-    if (set(payload)!={'message_observation_task_id','message_ids','expected_profile_revision','expected_binding_revision'}
+    if (set(payload)-{'conversation_key'}!={'message_observation_task_id','message_ids','expected_profile_revision','expected_binding_revision'}
             or not isinstance(payload.get('message_observation_task_id'),str) or not re.fullmatch(r'[0-9a-f]{32}',payload['message_observation_task_id'])
             or not isinstance(payload.get('message_ids'),list) or not 1<=len(payload['message_ids'])<=10
             or any(not isinstance(x,str) or not re.fullmatch(r'[A-Za-z0-9_~.\-]{1,128}',x) for x in payload['message_ids'])
@@ -905,6 +928,10 @@ def observed_reply_source(c,context,payload):
     if (not isinstance(profile['content'],dict) or set(profile['content'])-PROFILE_FIELDS
             or any(not isinstance(value,str) or len(value)>2000 for value in profile['content'].values())):
         raise KernelError('INVALID_DOCUMENT_STATE','本人资料无法完整读取，请先核对。')
+    # 会话键一旦给了，草稿就必须落在自己的窗口上：缺窗口、窗口过期、会话对不上都在这里拒绝。
+    # 未给键的旧调用方由 reply_window_fence 自己放行，升级前的页面行为不变。
+    key=window_key(payload)
+    reply_window_fence(c,context,payload,snapshot,key)
     return {'scope_id':context['scope_id'],'context_token':context['context_token'],'party':snapshot['party'],'messages':messages,
             'profile_revision':profile['revision'],'binding_revision':doc['revision'],
             'browser_session_fingerprint':binding['browser_session_fingerprint'],'block_boundary_observed':boundary,
@@ -1018,25 +1045,34 @@ def applicant_reply_window_get(payload,context):
         check_context(c,context['context_token']);document,content=applicant_reply_window.read(c,context['scope_id'],key)
         now=time.time()
         windows=[applicant_reply_windows.public(item,now) for item in applicant_reply_windows.items(document['container'])]
+        # 只读摘要：这个会话键下面已经有哪些草稿和回复意图，方便人判断该看哪一份；权威读取仍是 reply.get。
+        digest=applicant_reply.summary(c,context['scope_id'],key)
     return {'revision':document['revision'],'content':content,'conversation_key':key,'document_revision':document['document_revision'],
             'windows':windows,'observation_gap_ok':bool(content and 0<=now-content['last_observed_at']<=120),
+            'drafts':digest['drafts'],'drafts_truncated':digest['drafts_truncated'],
+            'intents':digest['intents'],'intents_truncated':digest['intents_truncated'],
+            'intents_unreadable':digest['intents_unreadable'],
             'automatic_polling':False,'sending_enabled':False}
 
 
 def applicant_reply_preflight(payload,context):
     applicant_only(context)
-    if (set(payload)!={'intent_id','expected_manual_revision'} or not isinstance(payload.get('intent_id'),str)
+    if (set(payload)-{'conversation_key'}!={'intent_id','expected_manual_revision'} or not isinstance(payload.get('intent_id'),str)
             or not re.fullmatch(r'[0-9a-f]{32}',payload['intent_id']) or type(payload.get('expected_manual_revision')) is not int or payload['expected_manual_revision']<0):
         raise KernelError('INVALID_REPLY_PREFLIGHT','请提供回复意图和当前草稿修订版本。',400)
     with store.runtime_db() as c:
         c.execute('BEGIN');check_context(c,context['context_token'])
         intent,task=applicant_reply.read(c,context['scope_id'],payload['intent_id']);task=dict(task)
+        # 传了会话键就必须是这份草稿自己的键：拿 A 会话的草稿在 B 会话里预检要说清是串会话。
+        conversation_key=check_conversation_key(task,payload.get('conversation_key'))
         check_manual_draft(c,task)
         if task['manual_revision']!=payload['expected_manual_revision']:raise KernelError('STALE_MANUAL_DRAFT','草稿修订已变化，请重新核对。')
         profile=store.runtime_document(c,context['scope_id'],'profile')
         binding_doc=store.runtime_document(c,context['scope_id'],'applicant_browser_binding')
         binding=applicant_binding.checked(binding_doc,context['scope_id'])
-        window_doc,window=applicant_reply_window.read(c,context['scope_id'])
+        # 按意图自己的会话键读窗口，不能退回默认窗口——那正是两份草稿互相冒充的来源。
+        window_doc,window=applicant_reply_window.read(c,context['scope_id'],intent['conversation_key'])
+        reply_window_fence(c,context,payload,intent,conversation_key)
     blockers=[]
     # 方案第 177 行「每步检查」：暂停后不能再往下走，也不该把可发项摆到用户面前
     import sandbox as _sandbox_state
@@ -1678,6 +1714,8 @@ DETAILS_TOOL = 'runtime.applicant.jobs.search.details'
 DETAILS_MAX = 5
 DETAILS_DEFAULT = 3
 DETAILS_SECONDS = 40.0
+# 连续这么多条详情页都不是详情页 → 判为疑似平台限流，停止并上报（方案第 149 行）
+DETAILS_LIMIT_STREAK = 3
 DETAILS_RENDER_SECONDS = 1.5
 DETAILS_OK = frozenset({'stored', 'updated', 'unchanged'})
 
@@ -1922,6 +1960,7 @@ def applicant_search_details(payload, context):
     deadline = started + DETAILS_SECONDS
     results, filled = [], 0
     stopped = None
+    consecutive_unavailable = 0
     for job_id in job_ids:
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
@@ -1946,7 +1985,17 @@ def applicant_search_details(payload, context):
         if status != 'observed':
             results.append({'job_id': job_id, 'status': status or 'unavailable',
                             'reason': 'jd_missing' if status == 'jd_missing' else 'detail_read_refused'})
+            if status == 'detail_page_required':
+                consecutive_unavailable += 1
+                if consecutive_unavailable >= DETAILS_LIMIT_STREAK:
+                    # 同一选择器前几条都能读，突然连续读不到详情页 —— 这是平台限制，
+                    # 不是数据问题（方案第 149 行：遇到限制停止本轮并交给用户处理）。
+                    stopped = 'SUSPECTED_PLATFORM_LIMIT'
+                    break
+            else:
+                consecutive_unavailable = 0
             continue
+        consecutive_unavailable = 0
         with store.runtime_db() as c:
             c.execute('BEGIN IMMEDIATE')
             check_context(c, context['context_token'])
@@ -1971,13 +2020,17 @@ def applicant_search_details(payload, context):
         state, _ = _job_search_state(c, context)
     remaining = applicant_job_search.pending_count(state) if state is not None else 0
     failed = len(results) - filled
+    suspected = stopped == 'SUSPECTED_PLATFORM_LIMIT'
     return {'status': 'stopped' if stopped else 'batch_done', 'stopped': stopped,
             'results': results, 'filled': filled, 'failed': failed,
             'remaining': remaining, 'pending_total': pending_total, 'limit': limit,
             'elapsed_seconds': round(max(0.0, time.monotonic() - started), 3),
+            'suspected_platform_limit': suspected,
             'account_verified': False, 'sending_enabled': False,
             'automatic_execution': False, 'read_only': True,
-            'note': '批量补读只补职责正文；单条失败已逐条记录，未读到的仍需人工核对。'}
+            'note': ('连续多条读不到详情页，疑似平台限制：本轮已停止，稍后再试或降速；'
+                     '不做自动重试（重试就是规避限流）。' if suspected else
+                     '批量补读只补职责正文；单条失败已逐条记录，未读到的仍需人工核对。')}
 
 
 def applicant_search_get(payload, context):
@@ -3320,8 +3373,8 @@ def register(router, engine):
     router.register(Tool("runtime.task.review", lambda p, ctx: engine.review(p, ctx)))
     router.register(Tool("runtime.task.replace", lambda p, ctx: engine.replace_draft(p, ctx)))
     router.register(Tool("runtime.task.edit", lambda p, ctx: engine.edit_draft(p, ctx)))
-    router.register(Tool("runtime.task.edits.get", lambda p, ctx: engine.draft_edits(p.get("task_id"), ctx), effect="none"))
-    router.register(Tool("runtime.task.copy.get", lambda p, ctx: engine.copy_draft(p.get("task_id"), ctx), effect="none"))
+    router.register(Tool("runtime.task.edits.get", lambda p, ctx: engine.draft_edits(p.get("task_id"), ctx, p.get("conversation_key")), effect="none"))
+    router.register(Tool("runtime.task.copy.get", lambda p, ctx: engine.copy_draft(p.get("task_id"), ctx, p.get("conversation_key")), effect="none"))
     router.register(Tool("runtime.task.execute", lambda p, ctx: engine.execute(p.get("task_id"), ctx["context_token"], work_only=True, receipt_owner=ctx)))
     router.register(Tool("runtime.task.get", lambda p, ctx: engine.read(p.get("task_id"), ctx), effect="none"))
     router.register(Tool("runtime.task.cancel", lambda p, ctx: engine.cancel(p.get("task_id"), ctx)))

@@ -10,6 +10,7 @@ import applicant_salary_review
 import applicant_binding
 import applicant_reply
 import applicant_reply_window
+import applicant_reply_windows
 import applicant_send
 import applicant_send_ledger
 import run_state
@@ -41,6 +42,23 @@ def check_manual_draft(c, row):
         valid = isinstance(text, str) and bool(text.strip()) and edit is not None and edit["text"] == text
     if not valid:
         raise KernelError("INVALID_MANUAL_DRAFT_STATE", "人工稿记录无法核对，请人工检查，暂不能修改或复制。")
+
+
+def check_conversation_key(row, value):
+    """人工核对只能发生在草稿自己的会话里。
+
+    拿 A 会话的草稿去 B 会话确认必须失败，而且要说清是「串会话」而不是「记录不存在」。
+    不传键的调用保持旧行为（升级前的页面只认 task_id），传了就必须对上。
+    """
+    if value is None:
+        return applicant_reply.task_key(row)
+    try:
+        key = applicant_reply_windows.checked_key(value)
+    except ValueError:
+        raise KernelError('INVALID_CONVERSATION_KEY', '会话键必须是 1..128 个不含空白的可见字符；不要用显示名，同名 HR 会串。', 400) from None
+    if key != applicant_reply.task_key(row):
+        raise KernelError('CONVERSATION_KEY_MISMATCH', '这份草稿属于另一个会话，不能在当前会话里修改、复制或确认。')
+    return key
 
 
 def commit_owner(c, context, tool_name):
@@ -493,7 +511,7 @@ class ExecutionEngine:
                 record_commit(c, context, "runtime.task.submit", result)
             return result
 
-    def _queue(self, c, tool, payload, key, context, parent_task_id, note=""):
+    def _queue(self, c, tool, payload, key, context, parent_task_id, note="", conversation_key=""):
         try:
             encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
             encoded.encode('utf-8')
@@ -504,15 +522,17 @@ class ExecutionEngine:
         existing = c.execute("SELECT * FROM runtime_tasks WHERE scope_id=? AND idempotency_key=?",
                              (context["scope_id"], key)).fetchone()
         if existing:
-            if existing["tool"] != tool.name or existing["payload"] != encoded or existing["conversation_note"] != note:
+            # 会话键也参与幂等比对：同一段消息在两个会话里是两份草稿，不能被当成同一次重试。
+            if (existing["tool"] != tool.name or existing["payload"] != encoded or existing["conversation_note"] != note
+                    or (existing["conversation_key"] or "") != conversation_key):
                 raise KernelError("IDEMPOTENCY_CONFLICT", "同一任务标识不能用于不同内容。")
             return public_task(existing), False
         task_id, now = uuid.uuid4().hex, time.time()
         c.execute("INSERT INTO runtime_tasks(task_id,scope_id,context_token,tool,kind,effect,status,"
-                  "idempotency_key,payload,result,error_code,created_at,updated_at,parent_task_id,conversation_note) "
-                  "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "idempotency_key,payload,result,error_code,created_at,updated_at,parent_task_id,conversation_note,conversation_key) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (task_id, context["scope_id"], context["context_token"], tool.name, tool.kind,
-                   tool.effect, "queued", key, encoded, None, None, now, now, parent_task_id, note))
+                   tool.effect, "queued", key, encoded, None, None, now, now, parent_task_id, note, conversation_key))
         store.runtime_event(c, task_id, context["scope_id"], tool.name, "queued")
         return public_task(c.execute("SELECT * FROM runtime_tasks WHERE task_id=?", (task_id,)).fetchone()), True
 
@@ -522,34 +542,43 @@ class ExecutionEngine:
             c.execute('BEGIN IMMEDIATE')
             check_context(c,context['context_token'])
             commit_owner(c,context,'runtime.applicant.reply.prepare')
+            conversation_key=payload.get('conversation_key',applicant_reply_windows.DEFAULT_KEY)
+            if not applicant_reply_windows.valid_key(conversation_key):
+                raise KernelError('INVALID_CONVERSATION_KEY','会话键必须是 1..128 个不含空白的可见字符；不要用显示名，同名 HR 会串。',400)
             binding,text=resolve_source(c,context,payload)
             if llm_draft.configuration().backend!='rules':
                 raise KernelError('OBSERVED_REPLY_RULES_REQUIRED','当前消息接入仅支持本地规则草稿，请明确配置本地规则模式；不会外发 HR 消息给模型。')
             prepared,note=prepare_draft({'message':text,'conversation_note':binding['party']['display_name']},context,c)
             if prepared.get('draft_backend','rules')!='rules':
                 raise KernelError('OBSERVED_REPLY_RULES_REQUIRED','草稿后端已变化，未准备平台消息草稿。')
-            references=[applicant_reply.reference(c,context['scope_id'],m['message_id']) for m in binding['messages']]
+            references=[applicant_reply.reference(c,context['scope_id'],m['message_id'],conversation_key) for m in binding['messages']]
             digest=applicant_reply.fingerprint(binding)
             if any(references):
                 if any(ref is None for ref in references) or len(set(references))!=1:
                     raise KernelError('REPLY_MESSAGE_OVERLAP','这批消息与已有回复意图部分重叠，请先人工核对已有草稿，不能重复准备。')
                 intent,row=applicant_reply.read(c,context['scope_id'],references[0])
-                if intent['fingerprint']!=digest:
+                if intent['fingerprint']!=digest or intent['conversation_key']!=conversation_key:
                     raise KernelError('REPLY_INTENT_CONFLICT','同一消息已有不同资料、会话或内容依据的回复意图，请人工核对，不会覆盖或重复生成。')
                 task=public_task(row)
             else:
-                key='observed-reply:'+hashlib.sha256(json.dumps([context['scope_id'],[m['message_id'] for m in binding['messages']]]).encode()).hexdigest()
-                task,created=self._queue(c,tool,prepared,key,context,context['task_id'],note)
+                # 旧默认会话的种子保持原样，升级前已排队的草稿仍按同一标识复用；
+                # 其他会话把键掺进种子，于是同一条消息在两个会话里各得一份草稿。
+                seed=([context['scope_id'],[m['message_id'] for m in binding['messages']]]
+                      if conversation_key==applicant_reply_windows.DEFAULT_KEY
+                      else [context['scope_id'],conversation_key,[m['message_id'] for m in binding['messages']]])
+                key='observed-reply:'+hashlib.sha256(json.dumps(seed).encode()).hexdigest()
+                task,created=self._queue(c,tool,prepared,key,context,context['task_id'],note,conversation_key)
                 if not created:
                     raise KernelError('INVALID_REPLY_INTENT_STATE','已有草稿缺少完整消息关联，未重复准备。')
                 identity=uuid.uuid4().hex
                 intent={**binding,'intent_id':identity,'draft_task_id':task['task_id'],
                         'source_observation_task_id':payload['message_observation_task_id'],'fingerprint':digest,'state':'prepared_unsent',
+                        'conversation_key':conversation_key,
                         'recipient_verified':False,'recency_verified':False,'automation_ready':False,'sent':False,'sending_enabled':False,'quota_consumed':False}
                 c.execute('INSERT INTO runtime_documents VALUES (?,?,?,?)',(context['scope_id'],'applicant_reply_intent:'+identity,1,json.dumps(intent,ensure_ascii=False)))
                 for message in binding['messages']:
-                    reference={'intent_id':identity,'message_id':message['message_id']}
-                    c.execute('INSERT INTO runtime_documents VALUES (?,?,?,?)',(context['scope_id'],applicant_reply.message_key(message['message_id']),1,json.dumps(reference,ensure_ascii=False)))
+                    reference={'intent_id':identity,'message_id':message['message_id'],'conversation_key':conversation_key}
+                    c.execute('INSERT INTO runtime_documents VALUES (?,?,?,?)',(context['scope_id'],applicant_reply.message_key(message['message_id'],conversation_key),1,json.dumps(reference,ensure_ascii=False)))
             return record_commit(c,context,'runtime.applicant.reply.prepare',{'intent':intent,'task':task,'fresh_observation_task_id':payload['message_observation_task_id']})
 
     def submit_batch(self, payload, context):
@@ -647,7 +676,7 @@ class ExecutionEngine:
             return record_commit(c, context, "runtime.task.batch.execute", result)
 
     def review(self, payload, context):
-        if (set(payload) != {"task_id", "expected_review_revision", "handled"}
+        if (set(payload) - {"conversation_key"} != {"task_id", "expected_review_revision", "handled"}
                 or not isinstance(payload["task_id"], str) or len(payload["task_id"]) > 128
                 or type(payload["expected_review_revision"]) is not int or type(payload["handled"]) is not bool):
             raise KernelError("INVALID_REVIEW", "处理标记参数不正确。", 400)
@@ -657,6 +686,7 @@ class ExecutionEngine:
             row = c.execute("SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?",
                             (payload["task_id"], context["scope_id"])).fetchone()
             public_task(row)
+            check_conversation_key(row, payload.get("conversation_key"))
             if row["kind"] != "work" or row["tool"] != "draft.reply" or row["status"] not in TERMINAL:
                 raise KernelError("REVIEW_NOT_READY", "请先生成草稿或取消任务，再标记人工处理进度。")
             if row["superseded_by_task_id"] is not None or row["review_status"] == "superseded":
@@ -670,7 +700,7 @@ class ExecutionEngine:
             return record_commit(c, context, "runtime.task.review", task)
 
     def replace_draft(self, payload, context):
-        if (set(payload) != {"task_id", "expected_review_revision", "expected_document_revision"}
+        if (set(payload) - {"conversation_key"} != {"task_id", "expected_review_revision", "expected_document_revision"}
                 or type(payload["expected_review_revision"]) is not int or type(payload["expected_document_revision"]) is not int):
             raise KernelError("INVALID_REPLACEMENT", "请核对记录和当前资料版本后重建草稿。", 400)
         with task_lease(payload["task_id"]), store.runtime_db() as c:
@@ -678,6 +708,7 @@ class ExecutionEngine:
             check_context(c, context["context_token"])
             row = c.execute("SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?", (payload["task_id"], context["scope_id"])).fetchone()
             source = public_task(row)
+            conversation_key = check_conversation_key(row, payload.get("conversation_key"))
             if row["kind"] != "work" or row["tool"] != "draft.reply" or row["effect"] != "none" or source.get("input_state") != "readable":
                 raise KernelError("INVALID_REPLACEMENT", "只能重建当前工作区内原话完整的本地草稿任务。")
             draft, note = prepare_draft({"message": source["message"], "conversation_note": row["conversation_note"]}, context, c)
@@ -695,7 +726,9 @@ class ExecutionEngine:
             if row["status"] not in {"queued", "completed", "failed", "blocked", "cancelled"}:
                 raise KernelError("TASK_BUSY", "请先核对正在执行或结果未知的任务，不能直接重建。")
             key = f"replacement:{row['task_id']}:{row['review_revision']}:{draft['document_revision']}"
-            task, created = self._queue(c, self.router.resolve("draft.reply"), draft, key, context, context["task_id"], note)
+            # 替代草稿继承原会话键：重建不能把 A 会话的草稿悄悄变成默认会话的。
+            task, created = self._queue(c, self.router.resolve("draft.reply"), draft, key, context, context["task_id"], note,
+                                        "" if conversation_key == applicant_reply_windows.DEFAULT_KEY else conversation_key)
             if not created:
                 raise KernelError("REPLACEMENT_CONFLICT", "替代任务标识冲突，请人工核对记录。")
             c.execute("UPDATE runtime_tasks SET supersedes_task_id=? WHERE task_id=?", (row["task_id"], task["task_id"]))
@@ -709,7 +742,7 @@ class ExecutionEngine:
             return record_commit(c, context, "runtime.task.replace", task)
 
     def edit_draft(self, payload, context):
-        if (set(payload) != {"task_id", "text", "confirmed", "expected_manual_revision", "expected_document_revision"}
+        if (set(payload) - {"conversation_key"} != {"task_id", "text", "confirmed", "expected_manual_revision", "expected_document_revision"}
                 or not isinstance(payload["task_id"], str) or not isinstance(payload["text"], str)
                 or not payload["text"].strip() or len(payload["text"]) > 8000 or payload["confirmed"] is not True
                 or type(payload["expected_manual_revision"]) is not int or payload["expected_manual_revision"] < 0
@@ -720,6 +753,7 @@ class ExecutionEngine:
             check_context(c, context["context_token"])
             row = c.execute("SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?", (payload["task_id"], context["scope_id"])).fetchone()
             task = public_task(row)
+            check_conversation_key(row, payload.get("conversation_key"))
             if (row["kind"] != "work" or row["tool"] != "draft.reply" or row["status"] != "completed"
                     or row["review_status"] != "pending" or row["superseded_by_task_id"] is not None
                     or not isinstance(task["result"], dict) or not isinstance(task["result"].get("text"), str)
@@ -742,12 +776,13 @@ class ExecutionEngine:
             task = public_task(c.execute("SELECT * FROM runtime_tasks WHERE task_id=?", (row["task_id"],)).fetchone())
             return record_commit(c, context, "runtime.task.edit", task)
 
-    def copy_draft(self, task_id, context):
+    def copy_draft(self, task_id, context, conversation_key=None):
         with store.runtime_db() as c:
             c.execute("BEGIN IMMEDIATE")
             check_context(c, context["context_token"])
             row = c.execute("SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?", (task_id, context["scope_id"])).fetchone()
             task = public_task(row)
+            check_conversation_key(row, conversation_key)
             if row["superseded_by_task_id"] is not None or row["review_status"] == "superseded":
                 raise KernelError("TASK_SUPERSEDED", "此草稿已有替代记录，请使用新的草稿。")
             if (row["kind"] != "work" or row["tool"] != "draft.reply" or row["status"] != "completed"
@@ -763,11 +798,12 @@ class ExecutionEngine:
             return {"task_id": row["task_id"], "text": row["manual_text"] if row["manual_revision"] else task["result"]["text"],
                     "manual_revision": row["manual_revision"], "document_revision": document["revision"]}
 
-    def draft_edits(self, task_id, context):
+    def draft_edits(self, task_id, context, conversation_key=None):
         with store.runtime_db() as c:
             check_context(c, context["context_token"])
             row = c.execute("SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?", (task_id, context["scope_id"])).fetchone()
             task = public_task(row)
+            check_conversation_key(row, conversation_key)
             if row["tool"] != "draft.reply" or row["kind"] != "work":
                 raise KernelError("EDIT_NOT_AVAILABLE", "此记录不属于文字草稿。")
             rows = c.execute("SELECT revision,document_revision,text,created_at FROM runtime_draft_edits WHERE task_id=? AND scope_id=? ORDER BY revision DESC LIMIT 20", (task_id, context["scope_id"])).fetchall()
