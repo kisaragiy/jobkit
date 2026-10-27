@@ -1785,9 +1785,14 @@ def applicant_search_step(payload, context):
             return {'status': 'finished', 'state': applicant_job_search.public(state),
                     'sending_enabled': False}
         revision = document['revision']
-        scroll = None
-        if combo['pages'] > 0:
-            scroll = applicant_browser.scroll_jobs()
+        pages_read = combo['pages']
+    # 浏览器 I/O 必须留在写事务之外（方案第 94 行「浏览器 IO 不能占用长写锁」）：
+    # scroll_jobs / read_current_jobs 内部会 current_execution → require_registered →
+    # 再开一个 store.runtime_db() → connect() 的 _migrate() 无条件 BEGIN IMMEDIATE，
+    # 外层写事务未提交时就是自己锁自己，5 秒后 database is locked（BUG-6，2026-10-28 实测）。
+    scroll = None
+    if pages_read > 0:
+        scroll = applicant_browser.scroll_jobs()
     if scroll is not None and scroll['status'] != 'scrolled':
         observation = {'status': 'unavailable', 'jobs': []}
     else:
@@ -1799,7 +1804,7 @@ def applicant_search_step(payload, context):
         # 2026-10-27 live 实测：同一页面再读一次就是 observed/15 条。
         # 有界重试（最多 2 次、每次 0.8s）；仍然读不到才保留 schema_changed，
         # 不放宽「结构变化」这个判据，也不是把失败折叠成空列表。
-        if observation['status'] == 'schema_changed' and combo['pages'] == 0:
+        if observation['status'] == 'schema_changed' and pages_read == 0:
             for _ in range(2):
                 time.sleep(0.8)
                 observation = applicant_browser.read_current_jobs(

@@ -66,6 +66,7 @@ try {
         'test_applicant_job_match',
         'test_applicant_job_detail',
         'test_job_search_details',
+        'test_kernel_integration',
         'test_version_endpoint',
         'test_check_version',
         'test_scripts_encoding',
