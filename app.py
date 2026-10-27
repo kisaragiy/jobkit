@@ -275,8 +275,11 @@ def runtime_replace_api(request: Request, task_id: str, payload: dict):
 
 
 @app.get("/api/runtime/tasks/{task_id}/copy")
-def runtime_copy_api(request: Request, task_id: str):
-    return runtime_call(request, "runtime.task.copy.get", {"task_id": task_id})
+def runtime_copy_api(request: Request, task_id: str, conversation_key: str | None = None):
+    # 不传照旧（升级前的页面只认 task_id）；传了就必须与草稿自己的会话对上，否则 409。
+    return runtime_call(request, "runtime.task.copy.get",
+                        {"task_id": task_id, "conversation_key": conversation_key} if conversation_key is not None
+                        else {"task_id": task_id})
 
 
 @app.post("/api/runtime/tasks/{task_id}/edit")
@@ -285,8 +288,11 @@ def runtime_edit_api(request: Request, task_id: str, payload: dict):
 
 
 @app.get("/api/runtime/tasks/{task_id}/edits")
-def runtime_edits_api(request: Request, task_id: str):
-    return runtime_call(request, "runtime.task.edits.get", {"task_id": task_id})
+def runtime_edits_api(request: Request, task_id: str, conversation_key: str | None = None):
+    # 同上：键可选；非法键在 engine 里变成 400 INVALID_CONVERSATION_KEY。
+    return runtime_call(request, "runtime.task.edits.get",
+                        {"task_id": task_id, "conversation_key": conversation_key} if conversation_key is not None
+                        else {"task_id": task_id})
 
 
 @app.get("/api/runtime/tasks/{task_id}")

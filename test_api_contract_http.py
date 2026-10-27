@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import unittest
+from copy import deepcopy
 from unittest import mock
 
 from fastapi.testclient import TestClient
@@ -16,8 +17,10 @@ import app
 import applicant_browser
 import applicant_send
 import applicant_send_ledger as ledger
+import main
 import runtime_tools
 import store
+import test_applicant_messages as messages_fixture
 import test_applicant_send as harness
 
 TOKEN_PATTERN = re.compile(r'[0-9a-f]{32}')
@@ -635,6 +638,118 @@ class OutcomeArchiveHttpContractTest(unittest.TestCase):
         self.write_ledger([self.seeded(ledger.STATE_OBSERVED, 1)])
         self.refused({'confirmed_by': 'user', 'ledger_ids': ['0' * 20]},
                      status=404, code='SEND_LEDGER_ENTRY_NOT_FOUND')
+
+
+class DraftConversationKeyHttpContractTest(unittest.TestCase):
+    """copy/edits 两个 GET 路由能吃可选的 conversation_key（docs/api/runtime-task-drafts.md）。
+
+    升级前的页面只认 task_id，所以不带键必须与旧行为逐字段一致；带了键就必须真的核对：
+    非法形状 400，跨会话 409。宁可 400 也不把坏键静默降级成「旧行为」——那样界面会以为
+    自己锁定了会话，实际却没有。
+    """
+
+    ROUTES = ('copy', 'edits')
+    INVALID_KEYS = ('', ' padded', 'has space', 'a' * 129, 'line\nbreak', '张三（招聘）')
+
+    def setUp(self):
+        # 复用多会话草稿的既有夹具链：虚构消息、本机临时库，不碰浏览器也不碰真实 jobkit.db。
+        self.f = messages_fixture.SelectedMessagesTest()
+        self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        self.h = self.f.h
+        self.messages = [deepcopy(messages_fixture.snapshot()['messages'][0])]
+        self.source = self.observe()
+        self.start('conv-a')
+        self.start('conv-b')
+        self.task_id = self.prepare('conv-a')['task']['task_id']
+        self.dispatch('runtime.task.execute', {'task_id': self.task_id})
+
+    # ---- helpers -------------------------------------------------------
+    def dispatch(self, tool, payload=None):
+        return main.dispatch(tool, payload, self.h.context['context_token'])
+
+    def observe(self):
+        value = {**messages_fixture.snapshot(), 'messages': deepcopy(self.messages)}
+        with mock.patch.object(runtime_tools.applicant_browser, 'read_chat', return_value=value):
+            return self.dispatch('runtime.applicant.messages.read', {})['trace_id']
+
+    def start(self, key):
+        return self.dispatch('runtime.applicant.reply.window.start',
+                             {'message_observation_task_id': self.observe(), 'expected_revision': 0,
+                              'expected_profile_revision': 1, 'expected_binding_revision': 1,
+                              'conversation_key': key})['data']
+
+    def prepare(self, key):
+        return self.dispatch('runtime.applicant.reply.prepare',
+                             {'message_observation_task_id': self.source,
+                              'message_ids': [message['message_id'] for message in self.messages],
+                              'expected_profile_revision': 1, 'expected_binding_revision': 1,
+                              'conversation_key': key})['data']
+
+    def http(self, route, key=None, token=None):
+        client = TestClient(app.app, base_url='http://127.0.0.1:18770')
+        try:
+            client.get('/workspace')
+            headers = {'X-Jobkit-Context': self.h.context['context_token'] if token is None else token}
+            params = {} if key is None else {'conversation_key': key}
+            return client.request('GET', '/api/runtime/tasks/%s/%s' % (self.task_id, route),
+                                  headers=headers, params=params)
+        finally:
+            client.close()
+
+    def ok(self, route, key=None):
+        response = self.http(route, key)
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload['ok'], payload)
+        return payload['data']
+
+    def refused(self, route, key, status, code):
+        response = self.http(route, key)
+        self.assertEqual(response.status_code, status, response.text)
+        payload = response.json()
+        self.assertFalse(payload['ok'])
+        self.assertEqual(payload['code'], code, payload)
+        self.assertTrue(payload['error'].strip())
+        return payload
+
+    # ---- 不带键：与升级前一致 ------------------------------------------
+    def test_without_the_key_the_http_response_matches_the_tool_exactly(self):
+        for route, tool, keys in (('copy', 'runtime.task.copy.get', {'task_id', 'text', 'manual_revision',
+                                                                    'document_revision'}),
+                                  ('edits', 'runtime.task.edits.get', {'task_id', 'total', 'edits'})):
+            with self.subTest(route=route):
+                direct = self.dispatch(tool, {'task_id': self.task_id})['data']
+                over_http = self.ok(route)
+                self.assertEqual(set(over_http), keys)
+                self.assertEqual(over_http, direct)
+                self.assertEqual(over_http['task_id'], self.task_id)
+
+    def test_own_key_returns_the_same_payload_as_the_legacy_call(self):
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                self.assertEqual(self.ok(route, 'conv-a'), self.ok(route))
+
+    # ---- 传了键：非法形状 400，跨会话 409 -------------------------------
+    def test_invalid_key_shapes_are_400_instead_of_falling_back_to_legacy(self):
+        for key in self.INVALID_KEYS:
+            for route in self.ROUTES:
+                with self.subTest(route=route, key=key):
+                    self.refused(route, key, 400, 'INVALID_CONVERSATION_KEY')
+
+    def test_a_key_from_another_conversation_is_refused(self):
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                self.refused(route, 'conv-b', 409, 'CONVERSATION_KEY_MISMATCH')
+                # 被拒之后自己的键照常可读：拒绝的是串会话，不是把草稿锁死。
+                self.assertEqual(self.ok(route, 'conv-a'), self.ok(route))
+
+    def test_a_foreign_context_token_still_cannot_read_the_draft(self):
+        for route in self.ROUTES:
+            with self.subTest(route=route):
+                response = self.http(route, 'conv-a', token='0' * 32)
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json()['code'], 'STALE_CONTEXT')
 
 
 if __name__ == '__main__':

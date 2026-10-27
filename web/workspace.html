@@ -81,9 +81,10 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}button:focus-visi
 <section class="panel"><h3>⑤ 发送结果核对（有待核对记录时才需要动手）</h3>
 <p class="hint">这里只核对「点过发送但还没确认结果」的记录。核对不会重发任何消息，也不能让系统判断对方看到没有；未核对完的记录会挡住后续真实发送。</p>
 <div id="capacityAlarm" role="alert" hidden></div>
-<div class="actions"><button id="refreshOutcome" type="button">读取待核对记录</button><button id="archiveLedger" type="button" hidden>归档已联系证据</button></div>
+<div class="actions"><button id="refreshOutcome" type="button">读取待核对记录</button><button id="archiveLedger" type="button" hidden>归档已联系证据</button><button id="archiveSelected" type="button" hidden disabled>仅归档选中</button></div>
 <p id="outcomeStatus" class="hint" role="status" aria-live="polite">尚未读取发送记录。</p>
 <p id="archiveLedgerStatus" class="hint" role="status" aria-live="polite"></p>
+<p id="archiveSelectedStatus" class="hint" role="status" aria-live="polite"></p>
 <div id="outcomeList"></div></section>
 <section class="panel"><h3>⑥ 暂停自动回复</h3>
 <p class="hint">暂停只停自动回复，招呼照发；也不会阻止你自己把草稿填进输入框或手工发送。换工作区不能绕过暂停。</p>
@@ -613,6 +614,7 @@ $('handoffQueue').onclick=()=>handoffSelected();
 $('refreshStats').onclick=()=>loadStats();
 /* ===== 发送结果核对（本机台账）：只登记人工结论，不重发、不推断送达 ===== */
 let outcomeRun=null, archiveRun=null;
+let archiveSelection=new Set(), archiveCandidates=new Map(), archiveSelectedRun=null, archiveSelectedNote=null;
 const outcomeText={SEND_OUTCOME_UNRESOLVED:'上一条发送结果还没核对，先核对完再发。',SEND_LEDGER_IN_FLIGHT:'这条正处在点击过程中，现在不能给结论。',SEND_VERIFY_TARGET_MISMATCH:'当前打开的对话不是这条记录的对象，先切回去再核对。',SEND_LEDGER_ENTRY_NOT_FOUND:'找不到这条发送记录。',SEND_LEDGER_ALREADY_CLOSED:'这条已经核对过了。',SEND_STABLE_TARGET_REQUIRED:'这个对象没有可证明的稳定标识，只能出草稿由你手动发送。',SEND_TARGET_ALREADY_CONTACTED:'这个对象已经有联系记录，不再重复发送。',SEND_TARGET_UNRESOLVED:'这个对象上次的结果没核对清楚，先核对。',SEND_RESOLUTION_BY_REQUIRED:'核对必须留下核对人。',INVALID_ACTION_REQUEST:'核对参数不完整，请重新读取后再试。'};
 function outcomePhrase(code){return outcomeText[code]||'这一步没有完成，请重新读取后核对。';}
 /* 台账容量报警：保护集（已联系 / 未决证据）超上限时不静默丢弃，必须让人看见并归档。
@@ -633,10 +635,10 @@ function paintCapacity(capacity){
 }
 function paintOutcome(data){
  const items=(data&&data.blocking)||[];
- const box=$('outcomeList');box.textContent='';
+ const box=$('outcomeList');box.textContent='';archiveCandidates.clear();
  paintCapacity(data&&data.capacity);
  paintArchiveEntry(data&&data.capacity,data&&data.archive);
- if(!items.length){$('outcomeStatus').textContent='当前没有待核对的发送记录。';return;}
+ if(!items.length){archiveSelection.clear();refreshArchiveSelection();$('outcomeStatus').textContent='当前没有待核对的发送记录。';return;}
  $('outcomeStatus').textContent='有 '+items.length+' 条发送结果还没核对。核对之前，真实发送会被挡住。';
  items.forEach(item=>{
   const row=document.createElement('div');row.className='panel';
@@ -650,8 +652,10 @@ function paintOutcome(data){
    const no=document.createElement('button');no.type='button';no.textContent='确认没发出';no.onclick=()=>resolveOutcome(item.ledger_id,'not_delivered',no);
    actions.append(ok,no);
   }
+  if(typeof item.ledger_id==='string'&&item.ledger_id){const pick=document.createElement('label'),cbox=document.createElement('input');cbox.type='checkbox';cbox.value=item.ledger_id;cbox.style='width:auto;min-height:auto';cbox.checked=archiveSelection.has(item.ledger_id);pick.textContent='选中这条证据（点名归档用）';pick.append(cbox);cbox.onchange=()=>{archiveSelectedNote=null;if(archiveSelectedRun)return;if(cbox.checked)archiveSelection.add(item.ledger_id);else archiveSelection.delete(item.ledger_id);refreshArchiveSelection();};archiveCandidates.set(item.ledger_id,cbox);row.append(pick);}
   row.append(t,hint,actions);box.append(row);
  });
+ refreshArchiveSelection();
 }
 /* 归档出口：报警说「需要人工归档」时必须给出出口，否则报警只是提醒不能解决。
    归档只搬已联系证据，不解除未核对记录；搬走之后同一对象照样拦住重复发送。 */
@@ -662,7 +666,7 @@ function paintArchiveEntry(capacity,archive){
  const total=archive&&typeof archive==='object'&&Number.isInteger(archive.archived)?archive.archived:0;
  $('archiveLedger').hidden=!(overflow||total>0);
 }
-function clearArchiveEntry(){archiveRun=null;$('archiveLedger').disabled=false;$('archiveLedger').hidden=true;$('archiveLedgerStatus').textContent='';}
+function clearArchiveEntry(){archiveRun=null;$('archiveLedger').disabled=false;$('archiveLedger').hidden=true;$('archiveLedgerStatus').textContent='';archiveSelectedRun=null;archiveSelectedNote=null;archiveSelection.clear();archiveCandidates.clear();$('archiveSelected').hidden=true;$('archiveSelected').disabled=true;$('archiveSelectedStatus').textContent='';}
 async function archiveLedgerEvidence(){
  if(archiveRun||!context||context.role!=='applicant')return;
  const status=$('archiveLedgerStatus');
@@ -683,6 +687,45 @@ async function archiveLedgerEvidence(){
  finally{if(archiveRun===run){archiveRun=null;$('archiveLedger').disabled=false;}}
 }
 $('archiveLedger').onclick=()=>archiveLedgerEvidence();
+/* 点名归档：整区归档只能一次搬一类，选择权要交给人。
+   选中的 ledger_id 原样回传；后端只要有一条不合格就整批拒绝，不做部分成功。 */
+const archiveSelectedText={SEND_LEDGER_IN_FLIGHT:'选中的这条正处在点击过程中：等它落定、先核对那条记录，再点名归档。',SEND_LEDGER_UNRESOLVED:'选中的记录里还有没核对结果的：先核对那条记录，归档不会解除未核对记录。',SEND_LEDGER_NOT_ARCHIVABLE:'选中的记录不是已联系证据（未核对或已确认没发出）：它不能归档，会留在待核对里。',SEND_LEDGER_ENTRY_NOT_FOUND:'选中的记录已不在本工作区台账里：请重新读取待核对记录后再选，本轮一条都没有归档。',SEND_LEDGER_ARCHIVE_INVALID:'点名归档请求不完整：请填写操作人后再试。',INVALID_ACTION_REQUEST:'点名归档参数不完整，请重新读取待核对记录后再选。',STALE_CONTEXT:'工作区身份已变化，请重新加载工作区后再归档。'};
+function archiveSelectedPhrase(code){return archiveSelectedText[code]||'点名归档没有完成（选中的记录整批处理，不会部分成功），请重新读取待核对记录后再选；台账没有变化。';}
+function refreshArchiveSelection(){
+ for(const [id,box] of archiveCandidates)box.checked=archiveSelection.has(id);
+ archiveSelection=new Set([...archiveSelection].filter(id=>archiveCandidates.has(id)));
+ const button=$('archiveSelected');
+ button.hidden=!archiveCandidates.size;
+ button.disabled=!!archiveSelectedRun||!archiveSelection.size;
+ if(archiveSelectedRun)return;
+ if(archiveSelectedNote){$('archiveSelectedStatus').textContent=archiveSelectedNote;return;}
+ $('archiveSelectedStatus').textContent=!archiveCandidates.size?'':archiveSelection.size?'已选中 '+archiveSelection.size+' 条：点名归档只搬已联系证据，仍会拦住重复发送，不会解除未核对记录。':'未选中任何记录：勾选记录后才能点名归档。';
+}
+async function archiveSelectedEvidence(){
+ if(archiveSelectedRun||!context||context.role!=='applicant')return;
+ const status=$('archiveSelectedStatus');
+ const ids=[...archiveSelection];
+ if(!ids.length){archiveSelectedNote='没有选中任何记录，点名归档没有发起，台账没有变化。';status.textContent=archiveSelectedNote;refreshArchiveSelection();return;}
+ const by=(prompt('点名归档操作人（必填，会记入归档记录）')||'').trim();
+ if(!by){archiveSelectedNote='没有填写操作人，点名归档没有发起，台账没有变化。';status.textContent=archiveSelectedNote;return;}
+ if(!confirm('仅归档选中的 '+ids.length+' 条记录：归档会把已联系证据搬到归档区，仍会拦住重复发送，不会解除未核对记录。确认归档？')){archiveSelectedNote='已取消点名归档，台账没有变化。';status.textContent=archiveSelectedNote;return;}
+ const run={token:context.context_token,epoch:workspaceLoad};archiveSelectedRun=run;archiveSelectedNote=null;
+ status.textContent='正在点名归档选中的 '+ids.length+' 条…';refreshArchiveSelection();
+ try{
+  const done=await api('applicant/chat/outcome/archive',{ledger_ids:ids,confirmed_by:by});
+  if(!sameWorkspace(run))return;
+  const moved=Number.isInteger(done.archived_count)?done.archived_count:0;
+  const already=Array.isArray(done.already_archived)?done.already_archived.length:0;
+  const total=Number.isInteger(done.archive_total)?done.archive_total:0;
+  archiveSelection.clear();
+  archiveSelectedNote='点名归档：已归档 '+moved+' 条，选中的记录里有 '+already+' 条此前已归档；归档区共 '+total+' 条，活跃台账剩 '+(Number.isInteger(done.active_count)?done.active_count:'—')+' 条。归档不会解除未核对记录，同一对象仍会拦住重复发送。';
+  status.textContent=archiveSelectedNote;
+  await loadOutcome();
+ }catch(e){if(sameWorkspace(run)){archiveSelectedNote=archiveSelectedPhrase(e.code);status.textContent=archiveSelectedNote;}}
+ finally{if(archiveSelectedRun===run){archiveSelectedRun=null;refreshArchiveSelection();}}
+}
+$('archiveSelected').onclick=()=>archiveSelectedEvidence();
+
 async function loadOutcome(){
  if(!context)return;
  const run={token:context.context_token,epoch:workspaceLoad};outcomeRun=run;$('refreshOutcome').disabled=true;

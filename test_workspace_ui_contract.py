@@ -294,5 +294,113 @@ class ArchiveEntryContractTest(unittest.TestCase):
                 self.assertNotIn(phrase, self.panel)
 
 
+class NamedArchiveSelectionContractTest(unittest.TestCase):
+    """点名归档：勾选具体记录再搬，不靠整区一把梭。
+
+    后端 `runtime.applicant.chat.outcome.archive` 早就吃 `ledger_ids`
+    （docs/api/applicant-send-loop.md 第十二节），工作台却只有整区归档 = 选择权没交到人手上。
+    这里锁五件事：复选框 value 就是那条 `ledger_id`、没选中不响应、请求体真带 `ledger_ids`、
+    四个拒绝码都有下一步动作、文案不许出现「发送失败 / 已送达」。
+    """
+
+    REFUSALS = ('SEND_LEDGER_IN_FLIGHT', 'SEND_LEDGER_UNRESOLVED',
+                'SEND_LEDGER_NOT_ARCHIVABLE', 'SEND_LEDGER_ENTRY_NOT_FOUND')
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (pathlib.Path(__file__).with_name('web') / 'workspace.html').read_text(encoding='utf-8')
+        blocks = re.findall(r'<script\b[^>]*>(.*?)</script\s*>', cls.html, re.S | re.I)
+        cls.script = '\n'.join(blocks)
+        start = cls.html.index('<section class="panel"><h3>⑤')
+        end = cls.html.index('<section class="panel"><h3>⑥')
+        cls.panel = cls.html[start:end]
+        fn = cls.script.index('async function archiveSelectedEvidence')
+        cls.select_fn = cls.script[fn:cls.script.index("$('archiveSelected').onclick")]
+        copy = cls.script.index('const archiveSelectedText')
+        cls.select_copy = cls.script[copy:cls.script.index('function refreshArchiveSelection')]
+        paint = cls.script.index('function paintOutcome(')
+        cls.paint_fn = cls.script[paint:cls.script.index('/* 归档出口')]
+
+    def test_each_row_gets_one_checkbox_valued_with_its_ledger_id(self):
+        # value 必须是稳定标识（ledger_id），不能用序号/位置：重拉面板后序号会变，点名校验就会点错条
+        self.assertIn('cbox.value=item.ledger_id', self.paint_fn)
+        self.assertIn("if(typeof item.ledger_id==='string'&&item.ledger_id){", self.paint_fn)
+        self.assertIn('cbox.type=checkbox', self.paint_fn.replace("'", ''))
+        self.assertIn('archiveCandidates.set(item.ledger_id,cbox)', self.paint_fn)
+        self.assertIn('cbox.checked=archiveSelection.has(item.ledger_id)', self.paint_fn)
+        # 每行一个：复选框在 forEach 里建，不是复用一个
+        self.assertIn('items.forEach(', self.paint_fn)
+
+    def test_selection_button_exists_once_next_to_whole_archive(self):
+        self.assertEqual(self.html.count('id="archiveSelected"'), 1)
+        self.assertEqual(self.html.count('id="archiveSelectedStatus"'), 1)
+        self.assertIn('<button id="archiveSelected" type="button" hidden disabled>仅归档选中</button>', self.panel)
+        self.assertLess(self.panel.index('id="archiveLedger"'), self.panel.index('id="archiveSelected"'))
+        self.assertLess(self.panel.index('id="archiveSelected"'), self.panel.index('id="outcomeList"'))
+
+    def test_button_is_enabled_only_when_something_is_selected(self):
+        self.assertIn("button.disabled=!!archiveSelectedRun||!archiveSelection.size;", self.script)
+        self.assertIn("button.hidden=!archiveCandidates.size;", self.script)
+        # 空选也得有话说，不能点了没反应
+        self.assertIn("if(!ids.length){", self.select_fn)
+        self.assertIn('没有选中任何记录', self.select_fn)
+        self.assertLess(self.select_fn.index('if(!ids.length){'), self.select_fn.index('prompt('))
+        # 换工作区/换列表要收干净，不能把上个工作区的勾选带到新工作区
+        self.assertIn('archiveSelection.clear();archiveCandidates.clear();', self.script)
+
+    def test_request_carries_ledger_ids_to_the_same_archive_route(self):
+        called = re.findall(r"api\('([^']+)'", self.select_fn)
+        self.assertEqual(called, ['applicant/chat/outcome/archive'])
+        self.assertIn('const ids=[...archiveSelection];', self.select_fn)
+        self.assertIn('{ledger_ids:ids,confirmed_by:by}', self.select_fn)
+        # 点名归档不该顺手带上整区/指纹参数
+        self.assertNotIn('target_sha256', self.select_fn)
+        # 没有改成新路由：整区归档那条调用原样保留
+        self.assertIn("api('applicant/chat/outcome/archive',{confirmed_by:by})", self.script)
+        paths = {getattr(route, 'path', '') for route in app.app.routes}
+        self.assertIn('/api/runtime/applicant/chat/outcome/archive', paths)
+
+    def test_operator_and_confirm_come_before_the_request(self):
+        api_at = self.select_fn.index("api('applicant/chat/outcome/archive'")
+        self.assertLess(self.select_fn.index('prompt('), api_at)
+        self.assertLess(self.select_fn.index('confirm('), api_at)
+        self.assertLess(self.select_fn.index('if(!by){'), api_at)
+        confirm_line = self.select_fn[self.select_fn.index('confirm('):api_at]
+        self.assertIn('仍会拦住重复发送', confirm_line)
+        self.assertIn('不会解除未核对记录', confirm_line)
+        self.assertIn('已联系证据', confirm_line)
+
+    def test_each_refusal_code_says_the_next_step(self):
+        for code in self.REFUSALS:
+            with self.subTest(code=code):
+                self.assertIn(code, self.select_copy)
+                hit = re.search(r"%s:'([^']+)'" % code, self.select_copy)
+                self.assertIsNotNone(hit, code)
+                self.assertTrue(hit.group(1).strip(), code)
+        # 整批拒绝要落地成一句话，不能静默失败
+        self.assertIn('archiveSelectedPhrase(e.code)', self.select_fn)
+        self.assertIn('不会部分成功', self.select_copy)
+
+    def test_result_reports_counts_and_reloads_the_panel(self):
+        for field in ('archived_count', 'already_archived', 'archive_total', 'active_count'):
+            with self.subTest(field=field):
+                self.assertIn(field, self.select_fn)
+        self.assertIn("已归档 '+moved+' 条", self.select_fn)
+        self.assertIn('此前已归档', self.select_fn)
+        self.assertIn('await loadOutcome();', self.select_fn)
+
+    def test_only_text_content_and_no_wording_claims_delivery(self):
+        self.assertNotIn('innerHTML', self.select_fn)
+        self.assertNotIn('innerHTML', self.paint_fn)
+        self.assertIn('textContent=', self.select_fn)
+        self.assertIn('textContent=', self.paint_fn)
+        for phrase in ('发送失败', '发送出错', '发送异常', '已送达', '送达成功', '发送成功', '平台已读'):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, self.select_copy)
+                self.assertNotIn(phrase, self.panel)
+        self.assertNotIn('发送失败', self.html)
+        self.assertNotIn('已送达', self.html)
+
+
 if __name__ == '__main__':
     unittest.main()
