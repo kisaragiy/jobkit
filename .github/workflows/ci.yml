@@ -32,7 +32,7 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: |
-            requirements.txt
+            requirements-dev.txt
             requirements-ocr.txt
 
       - name: Set up Node 20
@@ -43,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-ocr.txt
+          python -m pip install -r requirements-dev.txt -r requirements-ocr.txt
 
       - name: Dependency self-check
         # OCR 模型在干净 runner 上可能不可用，按可选处理（0 通过 / 2 有缺失 / 1 出错）
