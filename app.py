@@ -434,6 +434,11 @@ def runtime_chat_outcome_resolve_api(request:Request,payload:dict):
     return runtime_call(request,'runtime.applicant.chat.outcome.resolve',payload)
 
 
+@app.post('/api/runtime/applicant/chat/outcome/archive')
+def runtime_chat_outcome_archive_api(request:Request,payload:dict):
+    return runtime_call(request,'runtime.applicant.chat.outcome.archive',payload)
+
+
 @app.get('/api/runtime/run')
 def runtime_run_get_api(request:Request):
     return runtime_call(request,'runtime.run.get',{})

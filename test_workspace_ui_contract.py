@@ -216,5 +216,83 @@ class CapacityAlarmContractTest(unittest.TestCase):
         self.assertIn('拦住重复发送', self.capacity_copy)
 
 
+class ArchiveEntryContractTest(unittest.TestCase):
+    """归档出口：报警必须能落到一个动作上，且这个动作读起来是「人工归档」而不是「发送失败」。
+
+    后端早就有 `runtime.applicant.chat.outcome.archive`，工作台没入口 = 报警只说不做。
+    这里锁四件事：按钮唯一且按条件显示、只打归档路由、操作人必填、拒绝码翻译成下一步动作。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (pathlib.Path(__file__).with_name('web') / 'workspace.html').read_text(encoding='utf-8')
+        blocks = re.findall(r'<script\b[^>]*>(.*?)</script\s*>', cls.html, re.S | re.I)
+        cls.script = '\n'.join(blocks)
+        start = cls.html.index('<section class="panel"><h3>⑤')
+        end = cls.html.index('<section class="panel"><h3>⑥')
+        cls.panel = cls.html[start:end]
+        fn = cls.script.index('async function archiveLedgerEvidence')
+        cls.archive_fn = cls.script[fn:cls.script.index("$('archiveLedger').onclick")]
+        copy = cls.script.index('const archiveText')
+        cls.archive_copy = cls.script[copy:cls.script.index('function archivePhrase')]
+
+    def test_button_exists_once_and_sits_with_the_alarm(self):
+        self.assertEqual(self.html.count('id="archiveLedger"'), 1)
+        self.assertIn('<button id="archiveLedger" type="button" hidden>归档已联系证据</button>', self.panel)
+        self.assertLess(self.panel.index('id="capacityAlarm"'), self.panel.index('id="archiveLedger"'))
+        self.assertLess(self.panel.index('id="archiveLedger"'), self.panel.index('id="outcomeList"'))
+
+    def test_button_is_shown_only_when_there_is_something_to_archive(self):
+        self.assertIn('capacity.overflow===true', self.script)
+        self.assertIn('archive.archived', self.script)
+        self.assertIn("$('archiveLedger').hidden=!(overflow||total>0);", self.script)
+        # 换工作区要收起来，不能带着上一个工作区的状态留在屏幕上
+        self.assertIn('clearCapacityAlarm();clearArchiveEntry();', self.script)
+        self.assertIn("$('archiveLedger').hidden=true", self.script)
+
+    def test_only_the_outcome_archive_route_is_called(self):
+        called = re.findall(r"api\('([^']+)'", self.archive_fn)
+        self.assertEqual(called, ['applicant/chat/outcome/archive'])
+        for forbidden in ('resolve', 'chat/submit', 'chat/authorize', 'send/reserve'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.archive_fn)
+        paths = {getattr(route, 'path', '') for route in app.app.routes}
+        self.assertIn('/api/runtime/applicant/chat/outcome/archive', paths)
+
+    def test_operator_is_required_before_any_request(self):
+        self.assertIn('prompt(', self.archive_fn)
+        self.assertIn('if(!by){', self.archive_fn)
+        self.assertLess(self.archive_fn.index('prompt('), self.archive_fn.index("api('applicant/chat/outcome/archive'"))
+        self.assertLess(self.archive_fn.index('if(!by)'), self.archive_fn.index("api('applicant/chat/outcome/archive'"))
+        self.assertIn('confirm(', self.archive_fn)
+        # 确认文案必须说清「搬走证据」与「不解除未核对」两件事
+        self.assertIn('已联系证据', self.archive_fn)
+        self.assertIn('不会解除未核对记录', self.archive_fn)
+        self.assertIn('仍会拦住重复发送', self.archive_fn)
+
+    def test_refusal_codes_say_what_to_do_instead_of_failing_flat(self):
+        for code in ('SEND_LEDGER_UNRESOLVED', 'SEND_LEDGER_IN_FLIGHT'):
+            with self.subTest(code=code):
+                self.assertIn(code, self.archive_copy)
+        self.assertIn('先核对那条记录再归档', self.archive_copy)
+        # 失败要落到文案上，不能静默
+        self.assertIn('archivePhrase(e.code)', self.archive_fn)
+        self.assertNotIn('归档失败', self.archive_copy)
+
+    def test_result_shows_archived_and_total_counts(self):
+        for field in ('archived_count', 'archive_total', 'active_count', 'already_archived'):
+            with self.subTest(field=field):
+                self.assertIn(field, self.archive_fn)
+        self.assertIn('await loadOutcome();', self.archive_fn)          # 成功后重拉面板
+        self.assertIn('textContent=', self.archive_fn)
+        self.assertNotIn('innerHTML', self.archive_fn)
+
+    def test_archive_copy_never_claims_delivery_or_send_failure(self):
+        for phrase in ('发送失败', '发送出错', '发送异常', '已送达', '送达成功', '发送成功', '平台已读'):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, self.archive_copy)
+                self.assertNotIn(phrase, self.panel)
+
+
 if __name__ == '__main__':
     unittest.main()

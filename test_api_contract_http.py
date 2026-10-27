@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import app
 import applicant_browser
 import applicant_send
+import applicant_send_ledger as ledger
 import runtime_tools
 import store
 import test_applicant_send as harness
@@ -459,6 +460,181 @@ class SendLoopHttpContractTest(unittest.TestCase):
             if 'delivery_confirmed' in payload:
                 self.assertIs(payload['delivery_confirmed'], False)
             self.assertNotIn('sent', {key for key, value in payload.items() if value is True})
+
+
+class OutcomeArchiveHttpContractTest(unittest.TestCase):
+    """归档出口的 HTTP 契约（docs/api/applicant-send-loop.md 第十二节）。
+
+    工作台要能把「需要人工归档」报警变成一个动作，所以这条路由必须真的能打：身份/来源校验
+    一条都不放宽、payload 坏形状 400、未闭环拒绝码能区分「先核对」和「正在点」。
+    """
+
+    ROUTE = 'applicant/chat/outcome/archive'
+
+    def setUp(self):
+        self.f = harness.SendTargetTest()
+        self.f.setUp()
+        self.addCleanup(self.f.doCleanups)
+        self.h = self.f.h
+        self.scope = self.h.context['scope_id']
+
+    # ---- helpers -------------------------------------------------------
+    def http(self, body, token=None):
+        client = TestClient(app.app, base_url='http://127.0.0.1:18770')
+        try:
+            client.get('/workspace')
+            headers = {'X-Jobkit-Context': self.h.context['context_token'] if token is None else token}
+            return client.request('POST', '/api/runtime/' + self.ROUTE, headers=headers, json=body)
+        finally:
+            client.close()
+
+    def ok(self, body):
+        response = self.http(body)
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload['ok'], payload)
+        return payload['data']
+
+    def refused(self, body, *, status, code, token=None):
+        response = self.http(body, token)
+        self.assertEqual(response.status_code, status, response.text)
+        payload = response.json()
+        self.assertFalse(payload['ok'])
+        self.assertEqual(payload['code'], code, payload)
+        self.assertTrue(payload['error'].strip())
+        return payload
+
+    def seeded(self, state, n):
+        """造一条指定状态的台账记录（n 只用来区分对象与时间）。"""
+        stamp = 1793104188.0 + n
+        entry = ledger.new_entry(scope_id=self.scope, target_sha256='%064x' % n,
+                                 body_sha256='b' * 64, action='greeting', ts=stamp)
+        if state == ledger.STATE_SUBMITTING:
+            return entry
+        if state == ledger.STATE_OBSERVED:
+            return ledger.close(entry, ledger.STATE_OBSERVED, ts=stamp + 1)
+        closed = ledger.close(entry, ledger.STATE_UNKNOWN, ts=stamp + 1)
+        if state == ledger.STATE_UNKNOWN:
+            return closed
+        if state == ledger.STATE_DELIVERED:
+            return ledger.resolve(closed, 'delivered', by='user', ts=stamp + 2)
+        if state == ledger.STATE_NOT_DELIVERED:
+            return ledger.resolve(closed, 'not_delivered', by='user', ts=stamp + 2)
+        raise AssertionError('unsupported fixture state: %s' % state)
+
+    def write_ledger(self, items):
+        with store.runtime_db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute("INSERT INTO runtime_documents VALUES (?,?,?,?) "
+                      "ON CONFLICT(scope_id,kind) DO UPDATE SET revision=excluded.revision,"
+                      "content=excluded.content",
+                      (self.scope, ledger.LEDGER_KIND, 1,
+                       json.dumps({'items': items}, ensure_ascii=False)))
+
+    def ledger_items(self, kind=ledger.LEDGER_KIND):
+        with store.runtime_db() as c:
+            c.execute('BEGIN')
+            doc = store.runtime_document(c, self.scope, kind)
+        content = doc['content'] if isinstance(doc['content'], dict) else {}
+        return [item for item in (content.get('items') or []) if isinstance(item, dict)]
+
+    def outcome(self):
+        client = TestClient(app.app, base_url='http://127.0.0.1:18770')
+        try:
+            client.get('/workspace')
+            response = client.get('/api/runtime/applicant/chat/outcome',
+                                  headers={'X-Jobkit-Context': self.h.context['context_token']})
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()['data']
+        finally:
+            client.close()
+
+    # ---- 身份与来源 ----------------------------------------------------
+    def test_missing_or_foreign_context_is_refused_without_touching_the_ledger(self):
+        entry = self.seeded(ledger.STATE_OBSERVED, 1)
+        self.write_ledger([entry])
+        for token in ('', '0' * 32):
+            with self.subTest(token=token):
+                self.refused({'confirmed_by': 'user'}, status=409, code='STALE_CONTEXT', token=token)
+        self.assertEqual([item['ledger_id'] for item in self.ledger_items()], [entry['ledger_id']])
+
+    # ---- payload -------------------------------------------------------
+    def test_bad_payload_shapes_are_400_and_move_nothing(self):
+        entry = self.seeded(ledger.STATE_OBSERVED, 1)
+        self.write_ledger([entry])
+        for body in ({}, {'confirmed_by': ''}, {'confirmed_by': '   '},
+                     {'confirmed_by': 'user', 'ledger_ids': []},
+                     {'confirmed_by': 'user', 'ledger_ids': 'abc'},
+                     {'confirmed_by': 'user', 'target_sha256': 'abc'},
+                     {'confirmed_by': 'user', 'extra': 1}):
+            with self.subTest(body=body):
+                self.refused(body, status=400, code='INVALID_ACTION_REQUEST')
+        self.assertEqual(len(self.ledger_items()), 1)
+        self.assertEqual(self.ledger_items(ledger.ARCHIVE_KIND), [])
+
+    # ---- 正常路径 ------------------------------------------------------
+    def test_archive_moves_contacted_evidence_and_reports_counts(self):
+        observed = self.seeded(ledger.STATE_OBSERVED, 1)
+        delivered = self.seeded(ledger.STATE_DELIVERED, 2)
+        unresolved = self.seeded(ledger.STATE_UNKNOWN, 3)
+        self.write_ledger([observed, delivered, unresolved])
+
+        done = self.ok({'confirmed_by': 'user'})
+        self.assertEqual(set(done), {'status', 'archived', 'archived_count', 'already_archived',
+                                     'active_count', 'archive_total', 'capacity', 'archive',
+                                     'archived_by', 'sending_enabled', 'delivery_confirmed'})
+        self.assertEqual(done['status'], 'archived')
+        self.assertEqual(sorted(done['archived']),
+                         sorted([observed['ledger_id'], delivered['ledger_id']]))
+        self.assertEqual(done['archived_count'], 2)
+        self.assertEqual(done['already_archived'], [])
+        self.assertEqual(done['active_count'], 1)
+        self.assertEqual(done['archive_total'], 2)
+        self.assertEqual(done['archived_by'], 'user')
+        self.assertIs(done['sending_enabled'], False)
+        self.assertIs(done['delivery_confirmed'], False)
+        # 归档文档没有套上限，只报告条数；活跃台账只剩未核对那条
+        self.assertEqual(done['archive']['archived'], 2)
+        self.assertEqual([item['ledger_id'] for item in self.ledger_items()], [unresolved['ledger_id']])
+        self.assertEqual(sorted(item['ledger_id'] for item in self.ledger_items(ledger.ARCHIVE_KIND)),
+                         sorted([observed['ledger_id'], delivered['ledger_id']]))
+
+        # outcome 面板重拉后仍然看得到归档条数与剩下的未核对记录
+        view = self.outcome()
+        self.assertEqual(view['archive']['archived'], 2)
+        self.assertEqual([item['ledger_id'] for item in view['blocking']], [unresolved['ledger_id']])
+        self.assertIs(view['capacity']['overflow'], False)
+
+        # 重复归档幂等：点名同一条不产生第二条，报 already_archived
+        repeat = self.ok({'confirmed_by': 'user', 'ledger_ids': [observed['ledger_id']]})
+        self.assertEqual(repeat['status'], 'already_archived')
+        self.assertEqual(repeat['archived_count'], 0)
+        self.assertEqual(repeat['already_archived'], [observed['ledger_id']])
+        self.assertEqual(repeat['archive_total'], 2)
+
+    # ---- 拒绝码：先说「先核对」而不是「归档失败」 -----------------------
+    def test_unfinished_entries_are_refused_with_distinguishable_codes(self):
+        submitting = self.seeded(ledger.STATE_SUBMITTING, 1)
+        unresolved = self.seeded(ledger.STATE_UNKNOWN, 2)
+        skipped = self.seeded(ledger.STATE_NOT_DELIVERED, 3)
+        self.write_ledger([submitting, unresolved, skipped])
+
+        flight = self.refused({'confirmed_by': 'user', 'ledger_ids': [submitting['ledger_id']]},
+                              status=409, code='SEND_LEDGER_IN_FLIGHT')
+        self.assertIn('执行中', flight['error'])
+        pending = self.refused({'confirmed_by': 'user', 'ledger_ids': [unresolved['ledger_id']]},
+                               status=409, code='SEND_LEDGER_UNRESOLVED')
+        self.assertIn('核对', pending['error'])
+        self.refused({'confirmed_by': 'user', 'ledger_ids': [skipped['ledger_id']]},
+                     status=409, code='SEND_LEDGER_NOT_ARCHIVABLE')
+        # 整批拒绝，不做部分成功
+        self.assertEqual(len(self.ledger_items()), 3)
+        self.assertEqual(self.ledger_items(ledger.ARCHIVE_KIND), [])
+
+    def test_unknown_ledger_id_is_404(self):
+        self.write_ledger([self.seeded(ledger.STATE_OBSERVED, 1)])
+        self.refused({'confirmed_by': 'user', 'ledger_ids': ['0' * 20]},
+                     status=404, code='SEND_LEDGER_ENTRY_NOT_FOUND')
 
 
 if __name__ == '__main__':

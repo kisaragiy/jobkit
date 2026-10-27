@@ -107,6 +107,11 @@ def pending_details(state, limit=10):
     return missing
 
 
+def pending_count(state):
+    """还有多少条岗位缺 JD（只读计数，供推进提示用；不触发任何读取）。"""
+    return len(pending_details(state, limit=max(len(state['jobs']), 1)))
+
+
 def enrich_jd(state, job_id, jd, now, *, truncated=False):
     """把详情页读到的职责描述写回会话里的对应岗位。纯逻辑，无 IO。
 

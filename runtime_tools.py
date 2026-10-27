@@ -1648,6 +1648,13 @@ def send_manual_claim(payload,context):
 
 
 JOB_SEARCH_KIND = 'applicant_job_search'
+# 批量补读详情：一次 1..5 条、总时长 40 秒、每条之间重读会话。
+DETAILS_TOOL = 'runtime.applicant.jobs.search.details'
+DETAILS_MAX = 5
+DETAILS_DEFAULT = 3
+DETAILS_SECONDS = 40.0
+DETAILS_RENDER_SECONDS = 1.5
+DETAILS_OK = frozenset({'stored', 'updated', 'unchanged'})
 
 
 def _job_search_state(c, context):
@@ -1772,9 +1779,11 @@ def applicant_search_step(payload, context):
             raise KernelError('STALE_JOB_SEARCH', '搜索记录已变化，请重新读取。')
         event = applicant_job_search.apply_page(state, observation, time.time())
         _job_search_save(c, context, state)
+        # 只读提示：还剩多少条缺 JD，调用方自己决定要不要继续补（这里不自动读详情）。
         return record_commit(c, context, 'runtime.applicant.jobs.search.step',
                              {'status': 'page_read', 'event': event,
                               'state': applicant_job_search.public(state),
+                              'pending_details': applicant_job_search.pending_count(state),
                               'scroll': scroll, 'account_verified': False,
                               'sending_enabled': False, 'automatic_execution': False})
 
@@ -1829,11 +1838,96 @@ def applicant_job_detail(payload, context):
             detail = applicant_job_search.enrich_jd(
                 state, job_id, observed['jd'], time.time(), truncated=observed['truncated'])
             _job_search_save(c, context, state)
-        return record_commit(c, context, 'runtime.applicant.jobs.detail',
-                             {'status': detail['status'], 'job_id': job_id, 'detail': detail,
-                              'account_verified': False, 'sending_enabled': False,
-                              'automatic_execution': False, 'delivery_confirmed': False,
-                              'read_only': True})
+        # local_ui 动作没有控制提交凭据（同 jobs.search.open）：已落库的只是岗位正文证据。
+        return {'status': detail['status'], 'job_id': job_id, 'detail': detail,
+                'account_verified': False, 'sending_enabled': False,
+                'automatic_execution': False, 'delivery_confirmed': False,
+                'read_only': True}
+
+
+def applicant_search_details(payload, context):
+    """Fill JD text for jobs already collected in the current search session.
+
+    有界：一次 1..5 条（缺省 3），整批总时长 DETAILS_SECONDS。每条之间重读会话，
+    revision 变了立即停（不把刚读到的正文写进别人的会话）；单条失败只记一条，
+    不拖垮整批。返回 results / filled / failed / remaining / pending_total。
+    """
+    applicant_only(context)
+    if not isinstance(payload, dict) or set(payload) - {'limit'}:
+        raise KernelError('INVALID_JOB_SEARCH', '批量补读职责描述只接受 limit 一个字段。', 400)
+    limit = payload.get('limit', DETAILS_DEFAULT)
+    if type(limit) is not int or not 1 <= limit <= DETAILS_MAX:
+        raise KernelError('INVALID_JOB_SEARCH',
+                          '每次最多补 %d 条职责描述。' % DETAILS_MAX, 400)
+    with store.runtime_db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        check_context(c, context['context_token'])
+        plan = store.runtime_document(c, context['scope_id'], 'applicant_plan')
+        state, document = _job_search_state(c, context)
+        if state is None:
+            raise KernelError('JOB_SEARCH_REQUIRED', '请先开始一次有界搜索。', 400)
+        if state['plan_revision'] != plan['revision']:
+            raise KernelError('STALE_JOB_SEARCH', '求职方案已变化，请重新开始搜索。')
+        revision = document['revision']
+        pending_total = applicant_job_search.pending_count(state)
+        job_ids = applicant_job_search.pending_details(state, limit)
+    started = time.monotonic()
+    deadline = started + DETAILS_SECONDS
+    results, filled = [], 0
+    stopped = None
+    for job_id in job_ids:
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            stopped = 'LIMIT_SECONDS'
+            break
+        try:
+            opened = applicant_browser.detail_open(job_id, execution=DETAILS_TOOL)
+            if opened.get('status') != 'navigation_requested':
+                results.append({'job_id': job_id, 'status': opened.get('status') or 'unavailable',
+                                'reason': 'navigation_refused'})
+                continue
+            time.sleep(min(DETAILS_RENDER_SECONDS, max(0.0, deadline - time.monotonic())))
+            observed = applicant_browser.real_job_detail(expected_job_id=job_id)
+        except KernelError as error:
+            # 单条核不上（读错对象/页面结构变化）只废这一条，不影响后面几条。
+            results.append({'job_id': job_id, 'status': 'error', 'reason': error.code})
+            continue
+        status = observed.get('status')
+        if status != 'observed':
+            results.append({'job_id': job_id, 'status': status or 'unavailable',
+                            'reason': 'jd_missing' if status == 'jd_missing' else 'detail_read_refused'})
+            continue
+        with store.runtime_db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            check_context(c, context['context_token'])
+            state, document = _job_search_state(c, context)
+            if state is None or document['revision'] != revision:
+                # 读详情期间会话被改（重置/停止/再读页）：这条不写，立即停。
+                stopped = 'STALE_JOB_SEARCH'
+                break
+            try:
+                detail = applicant_job_search.enrich_jd(
+                    state, job_id, observed['jd'], time.time(), truncated=observed['truncated'])
+            except KernelError as error:
+                results.append({'job_id': job_id, 'status': 'error', 'reason': error.code})
+                continue
+            revision = _job_search_save(c, context, state)['revision']
+        results.append({'job_id': job_id, 'status': detail['status'], 'reason': None,
+                        'jd_chars': detail['jd_chars'], 'truncated': detail['truncated']})
+        filled += 1
+    with store.runtime_db() as c:
+        c.execute('BEGIN')
+        check_context(c, context['context_token'])
+        state, _ = _job_search_state(c, context)
+    remaining = applicant_job_search.pending_count(state) if state is not None else 0
+    failed = len(results) - filled
+    return {'status': 'stopped' if stopped else 'batch_done', 'stopped': stopped,
+            'results': results, 'filled': filled, 'failed': failed,
+            'remaining': remaining, 'pending_total': pending_total, 'limit': limit,
+            'elapsed_seconds': round(max(0.0, time.monotonic() - started), 3),
+            'account_verified': False, 'sending_enabled': False,
+            'automatic_execution': False, 'read_only': True,
+            'note': '批量补读只补职责正文；单条失败已逐条记录，未读到的仍需人工核对。'}
 
 
 def applicant_search_get(payload, context):
@@ -2891,6 +2985,9 @@ def register(router, engine):
                          maintenance_only=True))
     # 详情页读取：导航 + 读正文，两步都在内核里；导航改变页面状态所以是 local_ui。
     router.register(Tool('runtime.applicant.jobs.detail', applicant_job_detail,
+                         effect='local_ui', maintenance_only=True))
+    # 批量补读详情：一次有界条数 + 总时长上限，导航副作用同 jobs.detail。
+    router.register(Tool(DETAILS_TOOL, applicant_search_details,
                          effect='local_ui', maintenance_only=True))
     router.register(Tool('runtime.applicant.action.authorize', applicant_action_authorize,
                          maintenance_only=True))

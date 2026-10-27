@@ -688,14 +688,15 @@ def _detail_job_id(tab):
     return name if job_id_ok(name) else None
 
 
-def detail_open(job_id):
+def detail_open(job_id, *, execution='runtime.applicant.jobs.detail'):
     """Navigate the jobs tab to a fixed job-detail URL. Maintenance only.
 
     URL 由 job_id 拼出，不接受外部传入地址；导航本身有副作用（页面状态变化），
     因此走 require_maintenance + 执行名登记，不是 effect=none。
+    `execution` 只允许调用方登记自己的工具名（如批量补读），导航逻辑不复制。
     """
     require_maintenance()
-    current_execution('runtime.applicant.jobs.detail')
+    current_execution(execution)
     if not job_id_ok(job_id):
         raise KernelError('INVALID_JOB_DETAIL', '岗位标识不合法，无法打开详情页。', 400)
     tabs = _jobs_page_tabs()

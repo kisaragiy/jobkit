@@ -57,11 +57,17 @@ def cli():
         parser.add_argument('--keyword', required=True)
         parser.add_argument('--city', required=True)
         parser.add_argument('--pages', type=int, default=3)
+        parser.add_argument('--details', type=int, default=0,
+                            help='读完列表后按上限补读详情 JD（0 不读，1..5）')
         parser.add_argument('--reset', action='store_true')
         args = parser.parse_args(sys.argv[2:])
         if not 1 <= args.pages <= 6:
             print(json.dumps({'ok': False, 'code': 'INVALID_JOB_SEARCH',
                               'message': '一次最多读取 6 页。'}, ensure_ascii=False), file=sys.stderr)
+            return 1
+        if not 0 <= args.details <= 5:
+            print(json.dumps({'ok': False, 'code': 'INVALID_JOB_SEARCH',
+                              'message': '一次最多补 5 条详情。'}, ensure_ascii=False), file=sys.stderr)
             return 1
         try:
             with maintenance_access():
@@ -91,6 +97,17 @@ def cli():
                         break
                 summary = dispatch('runtime.applicant.jobs.search.get', {}, context['context_token'])
             print(json.dumps(summary, ensure_ascii=False))
+            if args.details and summary['data']['state'] is not None:
+                # 只补缺口：每次最多 args.details 条，读完就停；单条失败已在 results 里。
+                for _ in range(summary['data']['state']['counts']['jobs'] or 1):
+                    with maintenance_access():
+                        batch = dispatch('runtime.applicant.jobs.search.details',
+                                         {'limit': args.details}, context['context_token'])['data']
+                    print(json.dumps({key: batch[key] for key in
+                                      ('status', 'filled', 'failed', 'remaining', 'stopped', 'results')},
+                                     ensure_ascii=False))
+                    if batch['remaining'] <= 0 or batch['filled'] <= 0 or batch['stopped']:
+                        break
             return 0
         except KernelError as error:
             print(json.dumps({'ok': False, 'code': error.code, 'message': str(error),
