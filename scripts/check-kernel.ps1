@@ -67,6 +67,7 @@ try {
         'test_applicant_job_detail',
         'test_version_endpoint',
         'test_check_version',
+        'test_scripts_encoding',
         'test_applicant_action',
         'test_action_contract',
         'test_applicant_greeting',

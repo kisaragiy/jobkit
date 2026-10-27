@@ -20,10 +20,30 @@ ALERT = 2
 __all__ = ["OK", "ALERT", "ERROR", "emit", "verdict", "main_guard"]
 
 
+def _utf8_stream(stream) -> None:
+    """把输出流统一成 UTF-8。
+
+    Windows 上子进程/CI 的 stdout 可能是 cp936/charmap，此时打中文会抛
+    UnicodeEncodeError，让一次正常的检查变成「脚本崩了」。就地重配，失败也不致命。
+    """
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
+_utf8_stream(sys.stdout)
+_utf8_stream(sys.stderr)
+
+
 def emit(step: str, **fields) -> dict:
     """输出一行 JSON 结果并立即 flush（脚本可能被父进程按行读取）。"""
     payload = {"step": step, **fields}
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    try:
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+    except UnicodeEncodeError:
+        # 流编码仍不支持中文时的兜底：转义输出。宁可日志难读，也不能因为打日志而让检查失败。
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
     return payload
 
 
