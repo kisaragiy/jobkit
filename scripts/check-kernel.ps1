@@ -69,6 +69,7 @@ try {
         'test_kernel_integration',
         'test_version_endpoint',
         'test_check_version',
+        'test_check_install',
         'test_scripts_encoding',
         'test_reply_windows',
         'test_concurrency_probe',
