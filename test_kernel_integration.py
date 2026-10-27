@@ -71,7 +71,10 @@ class FakeBrowser:
 
     # ---- websocket ----
     def open(self, endpoint, **kwargs):
-        if endpoint != PAGE_WS:
+        # BUG-5 修复后 detail_open 会 Target.createTarget 出一个新 tab，
+        # 它的 ws 地址是动态的；这里按真实校验（回环 + 端口 + /devtools/page/）放行。
+        page_prefix = 'ws://127.0.0.1:9222/devtools/page/'
+        if endpoint != BROWSER_WS and not (endpoint or '').startswith(page_prefix):
             raise AssertionError('业务层连了没有桩的 endpoint：%r' % endpoint)
         connection = Connection(self, endpoint)
         self.connections.append(connection)
@@ -89,6 +92,20 @@ class FakeBrowser:
             return {'frameId': 'stub-frame-1'}
         if method == 'Runtime.evaluate':
             return {'result': {'value': self.render(request['params']['expression'], endpoint)}}
+        if method == 'Target.createTarget':
+            # 真实 Chrome：新 tab 的地址就是请求的 url；这里同步建出来，
+            # 后续 /json/list 与详情脚本都能看到它。
+            target_id = 'stub-target-%d' % len(self.requests)
+            # 与 Page.navigate 一致：允许模拟「服务端把请求重定向到另一个岗位」
+            requested = request['params']['url']
+            self.tabs.append({'url': self.landing.get(requested, requested),
+                              'webSocketDebuggerUrl': 'ws://127.0.0.1:9222/devtools/page/' + target_id})
+            return {'targetId': target_id}
+        if method == 'Target.closeTarget':
+            target_id = request['params']['targetId']
+            self.tabs = [tab for tab in self.tabs
+                         if not tab['webSocketDebuggerUrl'].endswith('/' + target_id)]
+            return {'success': True}
         raise AssertionError('业务层发了没有桩的 CDP 方法：%r' % method)
 
     # ---- 页面固定桩值 ----
@@ -254,9 +271,14 @@ class KernelIntegrationTest(unittest.TestCase):
         self.assertEqual(result['job_id'], 'gz1')
         self.assertTrue(result['read_only'])
         self.assertFalse(result['delivery_confirmed'])
-        self.assertEqual(self.browser.methods(), ['Page.navigate', 'Runtime.evaluate',
-                                                  'Page.navigate', 'Runtime.evaluate'])
-        self.assertEqual(self.browser.urls(), [DETAIL_URL % 'gz1'])
+        # BUG-5 修复后详情页在独立 tab 里打开：createTarget → 读 → closeTarget。
+        # 列表 tab 全程不被导航走；读完详情 tab 必须消失（不残留）。
+        self.assertEqual([r['params'].get('url') for r in self.browser.requests
+                          if r['method'] == 'Target.createTarget'], [DETAIL_URL % 'gz1'])
+        self.assertEqual([u for u in self.browser.urls() if '/job_detail/' in u], [],
+                         '读完详情 tab 应当已关闭')
+        self.assertEqual(len([u for u in self.browser.urls() if '/web/geek/job' in u]), 1,
+                         '列表 tab 必须还在（BUG-5 的核心）')
         jobs = self.session()['jobs']
         self.assertEqual(jobs['gz1']['jd'], detail_payload('gz1')['jd'])
         self.assertEqual(jobs['gz2']['jd'], '')
@@ -307,11 +329,11 @@ class KernelIntegrationTest(unittest.TestCase):
                               if e == SCRIPTS['applicant_dom_read.js']]), 2)
 
     # ---- f. 批量补读：limit 有界、只补缺口、返回剩余 ----
-    @unittest.expectedFailure
     def test_details_batch_fills_only_the_limit_and_reports_remaining(self):
         """规格：3 个缺 JD 的岗位 + limit=2 → 补 2 条、remaining=1。
 
-        现在必挂，是真 bug（本层发现，代码未改）：
+        曾是真 bug（BUG-5，本层发现），2026-10-28 已修：detail_open 改成在独立 tab
+        里 createTarget/closeTarget，列表 tab 不再被导航走。以下保留当时的记录：
         - 现象：filled=1、failed=1、remaining=2，status 仍是 'batch_done'、stopped=None；
           第 2 条 results 是 {'status': 'jobs_page_required', 'reason': 'navigation_refused'}。
         - 最小复现：打开一个 jobs 页 → search.open → step 收 3 条 → search.details {'limit': 2}。

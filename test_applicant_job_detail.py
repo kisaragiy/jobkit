@@ -125,12 +125,21 @@ class DetailOpenTest(unittest.TestCase):
         with self.assertRaises(KernelError) as caught:
             applicant_browser.detail_open('fictional~id')
         self.assertEqual(caught.exception.code, 'MAINTENANCE_REQUIRED')
+        # _browser_endpoint 要求 /devtools/browser/<uuid> 的完整格式
+        browser_ws = 'ws://127.0.0.1:9222/devtools/browser/11111111-2222-3333-4444-555555555555'
+        socket.recv = lambda: json.dumps({'id': socket.sent[-1]['id'],
+                                          'result': {'targetId': 'stub-target'}})
         with mock.patch.object(applicant_browser, 'current_execution'), \
-                mock.patch.object(applicant_browser, '_read_json', return_value=[jobs_tab]), \
+                mock.patch.object(applicant_browser, '_read_json',
+                                  side_effect=lambda path: {'webSocketDebuggerUrl': browser_ws}
+                                  if path == '/json/version' else [jobs_tab]), \
                 mock.patch.object(applicant_browser.websocket, 'create_connection',
                                   return_value=socket), maintenance_access():
             result = applicant_browser.detail_open('fictional~id')
         self.assertEqual(result['status'], 'navigation_requested')
+        self.assertEqual(result['target_id'], 'stub-target')
+        # BUG-5：改成在独立 tab 里打开，不再把列表 tab 导航走
+        self.assertEqual(socket.sent[0]['method'], 'Target.createTarget')
         self.assertEqual(socket.sent[0]['params']['url'],
                          'https://www.zhipin.com/job_detail/fictional~id.html')
 

@@ -693,37 +693,79 @@ def _detail_job_id(tab):
     return name if job_id_ok(name) else None
 
 
-def detail_open(job_id, *, execution='runtime.applicant.jobs.detail'):
-    """Navigate the jobs tab to a fixed job-detail URL. Maintenance only.
+def _close_stale_detail_tabs():
+    """关掉遗留的详情页 tab。
 
-    URL 由 job_id 拼出，不接受外部传入地址；导航本身有副作用（页面状态变化），
-    因此走 require_maintenance + 执行名登记，不是 effect=none。
-    `execution` 只允许调用方登记自己的工具名（如批量补读），导航逻辑不复制。
+    `_detail_page_tabs()` 只接受唯一一个；残留会让 `real_job_detail` 报
+    `page_selection_required`。关不掉也不致命（读取端会明确报错，不会瞎读）。
+    """
+    tabs = _detail_page_tabs()
+    if not tabs:
+        return 0
+    endpoint, _ = _browser_endpoint()
+    connection = websocket.create_connection(endpoint, timeout=3, suppress_origin=True,
+                                             http_no_proxy=['127.0.0.1', 'localhost'])
+    try:
+        for index, tab in enumerate(tabs[:10]):
+            try:
+                _fixed_reply(connection, index + 1, 'Target.closeTarget', {'targetId': tab['id']})
+            except (KernelError, OSError, websocket.WebSocketException):
+                pass
+    finally:
+        connection.close()
+    return len(tabs)
+
+
+def detail_open(job_id, *, execution='runtime.applicant.jobs.detail'):
+    """在**独立 tab** 里打开固定详情页 URL；列表 tab 保持不动。
+
+    URL 由 job_id 拼出，不接受外部传入地址。`execution` 只允许调用方登记自己的工具名
+    （如批量补读），导航逻辑不复制。
+
+    BUG-5（2026-10-28）：原来用 `Page.navigate` 把唯一的列表 tab 导航成详情页，
+    读完列表页就没了 —— 批量补读第二次必然 `jobs_page_required`。
+    现在改成 `Target.createTarget(background=True)` 新建受控 tab，读完由 detail_close 关掉。
     """
     require_maintenance()
     current_execution(execution)
     if not job_id_ok(job_id):
         raise KernelError('INVALID_JOB_DETAIL', '岗位标识不合法，无法打开详情页。', 400)
-    tabs = _jobs_page_tabs()
-    if tabs is None:
-        return {'status': 'unavailable', 'account_verified': False, 'sending_enabled': False}
-    if len(tabs) != 1:
-        return {'status': 'jobs_page_required' if not tabs else 'page_selection_required',
-                'account_verified': False, 'sending_enabled': False}
-    endpoint = _loopback_endpoint(tabs[0].get('webSocketDebuggerUrl'))
+    _close_stale_detail_tabs()
+    endpoint, fingerprint = _browser_endpoint()
     connection = websocket.create_connection(endpoint, timeout=3, suppress_origin=True,
                                              http_no_proxy=['127.0.0.1', 'localhost'])
     try:
-        reply = _fixed_reply(connection, 1, 'Page.navigate',
-                             {'url': DETAIL_URL_TEMPLATE.format(job_id=job_id)},
+        reply = _fixed_reply(connection, 1, 'Target.createTarget',
+                             {'url': DETAIL_URL_TEMPLATE.format(job_id=job_id),
+                              'background': True},
                              side_effect_possible=True)
     finally:
         connection.close()
-    if not isinstance(reply, dict) or not isinstance(reply.get('frameId'), str):
-        raise KernelError('BROWSER_SCHEMA_CHANGED', '详情页导航未返回可核对的结果。')
-    return {'status': 'navigation_requested', 'job_id': job_id,
+    target = reply.get('targetId') if isinstance(reply, dict) else None
+    if not isinstance(target, str) or not re.fullmatch(r'[A-Za-z0-9_\-]{1,128}', target):
+        raise KernelError('BROWSER_SCHEMA_CHANGED', '详情页打开结果无法核对。')
+    if _browser_endpoint()[1] != fingerprint:
+        raise KernelError('BROWSER_SESSION_CHANGED', '浏览器会话已变化，详情页打开结果需重新核对。')
+    return {'status': 'navigation_requested', 'job_id': job_id, 'target_id': target,
             'account_verified': False, 'sending_enabled': False,
             'delivery_confirmed': False}
+
+
+def detail_close(target_id):
+    """关掉 detail_open 新建的 tab。失败不抛：下次 open 会清理遗留。"""
+    if not isinstance(target_id, str) or not re.fullmatch(r'[A-Za-z0-9_\-]{1,128}', target_id):
+        return {'status': 'skipped'}
+    try:
+        endpoint, _ = _browser_endpoint()
+        connection = websocket.create_connection(endpoint, timeout=3, suppress_origin=True,
+                                                 http_no_proxy=['127.0.0.1', 'localhost'])
+        try:
+            _fixed_reply(connection, 1, 'Target.closeTarget', {'targetId': target_id})
+        finally:
+            connection.close()
+        return {'status': 'closed'}
+    except (KernelError, OSError, websocket.WebSocketException):
+        return {'status': 'close_failed'}
 
 
 def real_job_detail(expected_job_id=None):

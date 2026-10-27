@@ -1860,8 +1860,13 @@ def applicant_job_detail(payload, context):
         return {'status': opened['status'], 'job_id': job_id,
                 'account_verified': False, 'sending_enabled': False,
                 'automatic_execution': False, 'delivery_confirmed': False}
-    time.sleep(1.5)
-    observed = applicant_browser.real_job_detail(expected_job_id=job_id)
+    try:
+        time.sleep(1.5)
+        observed = applicant_browser.real_job_detail(expected_job_id=job_id)
+    finally:
+        # BUG-5：详情页在自己的 tab 里打开，读完必须关掉，否则残留 tab 会让下次读取
+        # 变成 page_selection_required。关不掉不重要（下次 open 会清理）。
+        applicant_browser.detail_close(opened.get('target_id'))
     status = observed['status']
     if status not in {'observed', 'jd_missing'}:
         return {'status': status, 'job_id': job_id,
@@ -1928,8 +1933,11 @@ def applicant_search_details(payload, context):
                 results.append({'job_id': job_id, 'status': opened.get('status') or 'unavailable',
                                 'reason': 'navigation_refused'})
                 continue
-            time.sleep(min(DETAILS_RENDER_SECONDS, max(0.0, deadline - time.monotonic())))
-            observed = applicant_browser.real_job_detail(expected_job_id=job_id)
+            try:
+                time.sleep(min(DETAILS_RENDER_SECONDS, max(0.0, deadline - time.monotonic())))
+                observed = applicant_browser.real_job_detail(expected_job_id=job_id)
+            finally:
+                applicant_browser.detail_close(opened.get('target_id'))
         except KernelError as error:
             # 单条核不上（读错对象/页面结构变化）只废这一条，不影响后面几条。
             results.append({'job_id': job_id, 'status': 'error', 'reason': error.code})
