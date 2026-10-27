@@ -1,5 +1,7 @@
 # jobkit
 
+[![kernel-gate](https://github.com/kisaragiy/jobkit/actions/workflows/ci.yml/badge.svg)](https://github.com/kisaragiy/jobkit/actions/workflows/ci.yml)
+
 一个**单内核**的求职工作台：把「找岗位 → 看匹配理由 → 出草稿 → 人工核对 → 记录结果」做成可追踪的本地流程，
 所有动作都经过同一套执行链，状态只写一个 SQLite。
 
