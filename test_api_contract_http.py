@@ -639,6 +639,115 @@ class OutcomeArchiveHttpContractTest(unittest.TestCase):
         self.refused({'confirmed_by': 'user', 'ledger_ids': ['0' * 20]},
                      status=404, code='SEND_LEDGER_ENTRY_NOT_FOUND')
 
+    # ---- 可归档清单：工作台「点名归档」复选框的来源 ----------------------
+    # 只有已联系证据搬得走；清单和归档路由的可见范围必须逐条一致，
+    # 否则界面挂出来的复选框一点就 404/409（勾了必然失败，比没有复选框更糟）。
+    ARCHIVABLE_KEYS = {'ledger_id', 'state', 'target', 'action', 'ts', 'body_sha256_short'}
+
+    def test_archivable_lists_only_contacted_evidence_and_no_blocking_rows(self):
+        observed = self.seeded(ledger.STATE_OBSERVED, 1)
+        delivered = self.seeded(ledger.STATE_DELIVERED, 2)
+        unresolved = self.seeded(ledger.STATE_UNKNOWN, 3)
+        submitting = self.seeded(ledger.STATE_SUBMITTING, 4)
+        skipped = self.seeded(ledger.STATE_NOT_DELIVERED, 5)
+        self.write_ledger([observed, delivered, unresolved, submitting, skipped])
+
+        view = self.outcome()
+        self.assertIsInstance(view['archivable'], list)
+        listed = [item['ledger_id'] for item in view['archivable']]
+        self.assertEqual(sorted(listed),
+                         sorted([observed['ledger_id'], delivered['ledger_id']]))
+        self.assertEqual(view['archivable_total'], 2)
+        self.assertIs(view['archivable_truncated'], False)
+
+        blocking_ids = {item['ledger_id'] for item in view['blocking']}
+        self.assertEqual(blocking_ids, {unresolved['ledger_id'], submitting['ledger_id']})
+        # 未核对 / 执行中 / 流水一条都不许进可归档清单
+        self.assertEqual(blocking_ids & set(listed), set())
+        self.assertNotIn(skipped['ledger_id'], listed)
+
+        by_id = {item['ledger_id']: item for item in view['archivable']}
+        for entry in (observed, delivered):
+            item = by_id[entry['ledger_id']]
+            self.assertEqual(set(item), self.ARCHIVABLE_KEYS)
+            self.assertIn(item['state'], ledger.ARCHIVABLE_STATES)
+            self.assertEqual(item['action'], entry['action'])
+            self.assertEqual(item['target'], entry['target_sha256'][:12])
+            self.assertEqual(item['body_sha256_short'], entry['body_sha256'][:12])
+            self.assertEqual(item['ts'], entry['ts'])
+
+        # blocking 字段照旧：条目还是完整台账记录，不能因为加了 archivable 就缩水
+        self.assertEqual(set(view), {'blocking', 'blockers_count', 'archivable', 'archivable_total',
+                                     'archivable_truncated', 'summary', 'capacity', 'archive',
+                                     'sending_enabled', 'delivery_confirmed'})
+        self.assertEqual(view['blockers_count'], 2)
+
+    def test_archivable_is_empty_when_nothing_is_contacted(self):
+        self.write_ledger([self.seeded(ledger.STATE_UNKNOWN, 1),
+                           self.seeded(ledger.STATE_NOT_DELIVERED, 2)])
+        view = self.outcome()
+        self.assertEqual(view['archivable'], [])
+        self.assertEqual(view['archivable_total'], 0)
+        self.assertIs(view['archivable_truncated'], False)
+        # 空台账同理：不能报 None，界面靠 length 判断显示与否
+        self.write_ledger([])
+        empty = self.outcome()
+        self.assertEqual(empty['archivable'], [])
+        self.assertEqual(empty['archivable_total'], 0)
+        self.assertIs(empty['archivable_truncated'], False)
+
+    def test_archivable_is_bounded_to_fifty_and_flags_truncation(self):
+        entries = [self.seeded(ledger.STATE_OBSERVED, n) for n in range(1, 61)]
+        self.write_ledger(entries)
+        view = self.outcome()
+        self.assertEqual(len(view['archivable']), 50)
+        self.assertEqual(view['archivable_total'], 60)
+        self.assertIs(view['archivable_truncated'], True)
+        # 按 ts 倒序：留下的是最近 50 条，最新的排最前
+        listed = [item['ledger_id'] for item in view['archivable']]
+        self.assertEqual(listed[0], entries[-1]['ledger_id'])
+        self.assertEqual(listed[-1], entries[10]['ledger_id'])
+        stamps = [item['ts'] for item in view['archivable']]
+        self.assertEqual(stamps, sorted(stamps, reverse=True))
+
+    def test_archivable_never_lists_another_workspace_evidence(self):
+        # 归档路由只搬当前工作区的活跃台账；列出别的 scope 的条目 = 勾了就 404
+        mine = self.seeded(ledger.STATE_OBSERVED, 1)
+        theirs = ledger.close(ledger.new_entry(scope_id='other-scope',
+                                               target_sha256='%064x' % 99, body_sha256='b' * 64,
+                                               action='greeting', ts=1793104188.0),
+                              ledger.STATE_OBSERVED, ts=1793104189.0)
+        self.write_ledger([mine])
+        with store.runtime_db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            c.execute("INSERT INTO runtime_documents VALUES (?,?,?,?) "
+                      "ON CONFLICT(scope_id,kind) DO UPDATE SET revision=excluded.revision,"
+                      "content=excluded.content",
+                      ('other-scope', ledger.LEDGER_KIND, 1,
+                       json.dumps({'items': [theirs]}, ensure_ascii=False)))
+        view = self.outcome()
+        self.assertEqual([item['ledger_id'] for item in view['archivable']], [mine['ledger_id']])
+        self.assertEqual(view['archivable_total'], 1)
+        # 与归档路由一致：那条不在本工作区，点名归档必须 404（界面上也不会出现勾选框）
+        self.refused({'confirmed_by': 'user', 'ledger_ids': [theirs['ledger_id']]},
+                     status=404, code='SEND_LEDGER_ENTRY_NOT_FOUND')
+
+    def test_archived_evidence_leaves_the_archivable_list(self):
+        observed = self.seeded(ledger.STATE_OBSERVED, 1)
+        unresolved = self.seeded(ledger.STATE_UNKNOWN, 2)
+        self.write_ledger([observed, unresolved])
+        self.assertEqual([item['ledger_id'] for item in self.outcome()['archivable']],
+                         [observed['ledger_id']])
+
+        self.ok({'confirmed_by': 'user', 'ledger_ids': [observed['ledger_id']]})
+        view = self.outcome()
+        # 搬走之后不再是「还能点名归档的对象」（再点只会 already_archived）
+        self.assertEqual(view['archivable'], [])
+        self.assertEqual(view['archivable_total'], 0)
+        # 但阻塞行还在，归档没有解除未核对记录
+        self.assertEqual([item['ledger_id'] for item in view['blocking']],
+                         [unresolved['ledger_id']])
+
 
 class DraftConversationKeyHttpContractTest(unittest.TestCase):
     """copy/edits 两个 GET 路由能吃可选的 conversation_key（docs/api/runtime-task-drafts.md）。

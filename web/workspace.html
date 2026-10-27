@@ -85,7 +85,10 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px}button:focus-visi
 <p id="outcomeStatus" class="hint" role="status" aria-live="polite">尚未读取发送记录。</p>
 <p id="archiveLedgerStatus" class="hint" role="status" aria-live="polite"></p>
 <p id="archiveSelectedStatus" class="hint" role="status" aria-live="polite"></p>
-<div id="outcomeList"></div></section>
+<div id="outcomeList"></div>
+<div id="archivableArea" hidden><h4>可归档证据（已联系证据，点名归档用）</h4>
+<p class="hint">这些是已经确认联系过的记录：勾选后点名搬进归档区。归档不会解除未核对记录，同一对象仍然会拦住重复发送。</p>
+<div id="archivableList"></div></div></section>
 <section class="panel"><h3>⑥ 暂停自动回复</h3>
 <p class="hint">暂停只停自动回复，招呼照发；也不会阻止你自己把草稿填进输入框或手工发送。换工作区不能绕过暂停。</p>
 <div class="actions"><button id="refreshRunState" type="button">读取运行开关</button><button id="pauseReply" type="button">暂停自动回复</button><button id="resumeReply" type="button" disabled>恢复自动回复</button></div>
@@ -635,10 +638,12 @@ function paintCapacity(capacity){
 }
 function paintOutcome(data){
  const items=(data&&data.blocking)||[];
+ const evidence=(data&&Array.isArray(data.archivable))?data.archivable:[];
  const box=$('outcomeList');box.textContent='';archiveCandidates.clear();
  paintCapacity(data&&data.capacity);
  paintArchiveEntry(data&&data.capacity,data&&data.archive);
- if(!items.length){archiveSelection.clear();refreshArchiveSelection();$('outcomeStatus').textContent='当前没有待核对的发送记录。';return;}
+ paintArchivable(evidence,data&&data.archivable_total,data&&data.archivable_truncated);
+ if(!items.length){refreshArchiveSelection();$('outcomeStatus').textContent='当前没有待核对的发送记录。';return;}
  $('outcomeStatus').textContent='有 '+items.length+' 条发送结果还没核对。核对之前，真实发送会被挡住。';
  items.forEach(item=>{
   const row=document.createElement('div');row.className='panel';
@@ -652,10 +657,33 @@ function paintOutcome(data){
    const no=document.createElement('button');no.type='button';no.textContent='确认没发出';no.onclick=()=>resolveOutcome(item.ledger_id,'not_delivered',no);
    actions.append(ok,no);
   }
-  if(typeof item.ledger_id==='string'&&item.ledger_id){const pick=document.createElement('label'),cbox=document.createElement('input');cbox.type='checkbox';cbox.value=item.ledger_id;cbox.style='width:auto;min-height:auto';cbox.checked=archiveSelection.has(item.ledger_id);pick.textContent='选中这条证据（点名归档用）';pick.append(cbox);cbox.onchange=()=>{archiveSelectedNote=null;if(archiveSelectedRun)return;if(cbox.checked)archiveSelection.add(item.ledger_id);else archiveSelection.delete(item.ledger_id);refreshArchiveSelection();};archiveCandidates.set(item.ledger_id,cbox);row.append(pick);}
   row.append(t,hint,actions);box.append(row);
  });
  refreshArchiveSelection();
+}
+/* 可归档证据：能点名归档的只有「已联系证据」，未核对记录本来就搬不走（搬走等于关掉闸门）。
+   所以复选框只挂在这份列表上，blocking 行只做展示 —— 勾了必然被拒的框比没有框更糟。 */
+function paintArchivable(list,total,truncated){
+ const area=$('archivableArea'),box=$('archivableList');box.textContent='';
+ const rows=Array.isArray(list)?list.map(item=>item).filter(item=>item&&typeof item==='object'):[];
+ area.hidden=!rows.length;
+ if(!rows.length)return;
+ const count=Number.isInteger(total)&&total>rows.length?total:rows.length;
+ if(truncated===true&&count>rows.length){const cap=document.createElement('p');cap.className='hint';cap.textContent='这里只列最近 '+rows.length+' 条，可归档共 '+count+' 条：归档后重新读取即可看到剩下的。';box.append(cap);}
+ rows.forEach(item=>{
+  const row=document.createElement('div');row.className='panel';
+  const t=document.createElement('p');
+  t.textContent='记录 '+String(item.ledger_id||'').slice(0,12)+' · 状态 '+(item.state||'')+' · 对象 '+(item.target||'—')+' · 动作 '+(item.action||'')+' · 时间 '+stamp(item.ts);
+  if(typeof item.ledger_id==='string'&&item.ledger_id){
+   const pick=document.createElement('label'),cbox=document.createElement('input');
+   cbox.type='checkbox';cbox.value=item.ledger_id;cbox.style='width:auto;min-height:auto';
+   cbox.checked=archiveSelection.has(item.ledger_id);
+   pick.textContent='选中这条证据（点名归档用）';pick.append(cbox);
+   cbox.onchange=()=>{archiveSelectedNote=null;if(archiveSelectedRun)return;if(cbox.checked)archiveSelection.add(item.ledger_id);else archiveSelection.delete(item.ledger_id);refreshArchiveSelection();};
+   archiveCandidates.set(item.ledger_id,cbox);row.append(pick);
+  }
+  row.append(t);box.append(row);
+ });
 }
 /* 归档出口：报警说「需要人工归档」时必须给出出口，否则报警只是提醒不能解决。
    归档只搬已联系证据，不解除未核对记录；搬走之后同一对象照样拦住重复发送。 */
@@ -666,7 +694,7 @@ function paintArchiveEntry(capacity,archive){
  const total=archive&&typeof archive==='object'&&Number.isInteger(archive.archived)?archive.archived:0;
  $('archiveLedger').hidden=!(overflow||total>0);
 }
-function clearArchiveEntry(){archiveRun=null;$('archiveLedger').disabled=false;$('archiveLedger').hidden=true;$('archiveLedgerStatus').textContent='';archiveSelectedRun=null;archiveSelectedNote=null;archiveSelection.clear();archiveCandidates.clear();$('archiveSelected').hidden=true;$('archiveSelected').disabled=true;$('archiveSelectedStatus').textContent='';}
+function clearArchiveEntry(){archiveRun=null;$('archiveLedger').disabled=false;$('archiveLedger').hidden=true;$('archiveLedgerStatus').textContent='';archiveSelectedRun=null;archiveSelectedNote=null;archiveSelection.clear();archiveCandidates.clear();$('archiveSelected').hidden=true;$('archiveSelected').disabled=true;$('archiveSelectedStatus').textContent='';$('archivableArea').hidden=true;$('archivableList').textContent='';}
 async function archiveLedgerEvidence(){
  if(archiveRun||!context||context.role!=='applicant')return;
  const status=$('archiveLedgerStatus');

@@ -412,7 +412,10 @@ def runtime_applicant_reply_get_api(request:Request,intent_id:str):
 
 @app.get('/api/runtime/applicant/reply-window')
 def runtime_reply_window_get_api(request:Request,conversation_key:str|None=None):
-    payload={'conversation_key':conversation_key} if conversation_key else {}
+    # 与 copy/edits 两个路由同口径（2026-10-28 统一）：用 `is not None` 而不是真值判断。
+    # 区别只在 `?conversation_key=`（空串）：旧写法会静默退回 legacy，调用方以为键生效了；
+    # 现在交给 engine 报 400 INVALID_CONVERSATION_KEY —— 静默降级正是本项目一直在消灭的毛病。
+    payload={'conversation_key':conversation_key} if conversation_key is not None else {}
     return runtime_call(request,'runtime.applicant.reply.window.get',payload)
 
 

@@ -72,6 +72,8 @@ PROTECTED_STATES = BLOCKING_STATES + CONTACTED_STATES
 EVICTABLE_STATES = (STATE_NOT_DELIVERED,)
 # 可归档集：只有已联系证据能搬出活跃台账 —— 阻塞态搬走等于把闸门关掉
 ARCHIVABLE_STATES = CONTACTED_STATES
+# 点名归档清单的默认上限：面板响应必须有界，超出的只报总数（界面写「只列最近 N 条」）
+ARCHIVABLE_VIEW_LIMIT = 50
 
 RESOLUTIONS = ('delivered', 'not_delivered', 'duplicate_confirmed')
 
@@ -427,6 +429,55 @@ def merge_archive(items, new_items):
             index[key] = len(kept)
         kept.append(payload)
     return kept
+
+
+def _view_ts(item):
+    """排序用的时间戳：缺 ts / 非数值一律当最旧（0），别让坏数据冲到列表最前面。"""
+    stamp = item.get('ts') if isinstance(item, dict) else None
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)):
+        return 0.0
+    return float(stamp)
+
+
+def _view_stamp(item):
+    """回给界面的 ts：坏的直接给 None，不给 0（0 会被渲染成 1970 年，看着像真数据）。"""
+    stamp = item.get('ts') if isinstance(item, dict) else None
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)):
+        return None
+    return float(stamp)
+
+
+def _target_digest(item):
+    """对象摘要：台账只存指纹、不存名字，给前 12 位让操作者能和别处对上号。"""
+    target = item.get('target_sha256') if isinstance(item, dict) else None
+    if isinstance(target, str) and target:
+        return target[:12]
+    note = item.get('note') if isinstance(item, dict) else None
+    if isinstance(note, str) and note.strip():
+        return note.strip()[:40]
+    return ''
+
+
+def archivable_view(items, *, limit=ARCHIVABLE_VIEW_LIMIT):
+    """可归档条目的**只读清单**：按 ts 倒序，最多 `limit` 条 —— 给工作台挂勾选框用。
+
+    只收 `archive_eligible` 认可的已联系证据：未核对 / 流水本来就搬不走，列出来只会让人
+    点一个必然失败的按钮（勾上再被 `SEND_LEDGER_UNRESOLVED` 拒绝）。
+    超出上限不静默丢：`total` 报全量条数，`truncated` 让界面说清「只列最近 N 条」。
+    """
+    picked = [item for item in (items or ()) if archive_eligible(item)]
+    ordered = sorted(picked, key=_view_ts, reverse=True)   # 稳定排序：同 ts 保持原顺序
+    bound = max(int(limit), 0)
+    view = [{'ledger_id': item.get('ledger_id'),
+             'state': item.get('state'),
+             'target': _target_digest(item),
+             'action': item.get('action'),
+             'ts': _view_stamp(item),
+             'body_sha256_short': (item['body_sha256'][:12]
+                                   if isinstance(item.get('body_sha256'), str) else '')}
+            for item in ordered[:bound]]
+    return {'archivable': view, 'archivable_total': len(ordered),
+            'archivable_truncated': len(ordered) > len(view)}
 
 
 def archive_report(items):

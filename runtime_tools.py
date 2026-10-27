@@ -2854,10 +2854,17 @@ def applicant_chat_authorize(payload, context):
 
 
 def applicant_chat_outcome_get(payload, context):
-    """看当前还没核对清楚的发送记录（只读）。
+    """看当前还没核对清楚的发送记录 + 可以点名归档的已联系证据（只读）。
 
     `capacity` 只算**活跃台账**（5000 上限管的就是这份文档）；归档条数单独给在
     `archive` 里。`blocking` 仍然来自活跃 ∪ 归档 —— 归档里万一混进阻塞态也必须看得见。
+
+    `archivable` 是**能点名归档的对象**：只取当前工作区活跃台账里 `archive_eligible` 的
+    条目（`observed_reply` / `resolved_delivered`）。必须与
+    `runtime.applicant.chat.outcome.archive` 的可见范围逐条一致，否则界面挂出来的
+    复选框一点就 404 / 409 —— 那比没有复选框更糟。所以这里用 `_ledger_read`
+    （当前 scope 的活跃文档）而不是跨 scope 的 `_ledger_read_all`。上限见
+    `ARCHIVABLE_VIEW_LIMIT`，超出只报 `archivable_total` + `archivable_truncated`。
     """
     applicant_only(context)
     if payload:
@@ -2868,8 +2875,13 @@ def applicant_chat_outcome_get(payload, context):
         items = _ledger_read_all(c)
         active = _ledger_read_active(c)
         archived = _ledger_read_archive(c)
+        movable, _revision = _ledger_read(c, context)
     blocking = applicant_send_ledger.blocking_items(items)
+    view = applicant_send_ledger.archivable_view(movable)
     return {'blocking': blocking, 'blockers_count': len(blocking),
+            'archivable': view['archivable'],
+            'archivable_total': view['archivable_total'],
+            'archivable_truncated': view['archivable_truncated'],
             'summary': applicant_send_ledger.summary(items, scope_id=context['scope_id']),
             'capacity': applicant_send_ledger.capacity(active),
             'archive': applicant_send_ledger.archive_report(archived),

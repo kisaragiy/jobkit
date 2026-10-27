@@ -402,5 +402,95 @@ class NamedArchiveSelectionContractTest(unittest.TestCase):
         self.assertNotIn('已送达', self.html)
 
 
+class ArchivableEvidencePanelContractTest(unittest.TestCase):
+    """可归档证据区：复选框必须挂在**搬得走**的对象上。
+
+    `outcome.get` 的 `blocking` 是未核对记录，按规则**本来就不许归档**
+    （后端报 `SEND_LEDGER_UNRESOLVED`）。复选框挂在那批行上 = 每个勾都会失败。
+    所以这里锁五件事：新区域只在 `archivable` 非空时显示、复选框 value 来自
+    `ledger_id`、`blocking` 行已经没有复选框、请求体照旧带 `ledger_ids`、
+    上限截断要说清「只列最近 N 条」。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.html = (pathlib.Path(__file__).with_name('web') / 'workspace.html').read_text(encoding='utf-8')
+        blocks = re.findall(r'<script\b[^>]*>(.*?)</script\s*>', cls.html, re.S | re.I)
+        cls.script = '\n'.join(blocks)
+        start = cls.html.index('<section class="panel"><h3>⑤')
+        end = cls.html.index('<section class="panel"><h3>⑥')
+        cls.panel = cls.html[start:end]
+        paint = cls.script.index('function paintOutcome(')
+        cls.blocking_fn = cls.script[paint:cls.script.index('/* 可归档证据')]
+        view = cls.script.index('function paintArchivable(')
+        cls.archivable_fn = cls.script[view:cls.script.index('/* 归档出口')]
+        fn = cls.script.index('async function archiveSelectedEvidence')
+        cls.select_fn = cls.script[fn:cls.script.index("$('archiveSelected').onclick")]
+
+    def test_area_exists_once_inside_the_outcome_panel(self):
+        self.assertEqual(self.html.count('id="archivableArea"'), 1)
+        self.assertEqual(self.html.count('id="archivableList"'), 1)
+        self.assertIn('<div id="archivableArea" hidden>', self.panel)
+        self.assertLess(self.panel.index('id="archivableArea"'), self.panel.index('id="archivableList"'))
+        # 归档出口那几个按钮在这个区域之前：先说清能搬什么，再给动作
+        self.assertLess(self.panel.index('id="archiveSelected"'), self.panel.index('id="archivableArea"'))
+
+    def test_area_is_shown_only_when_there_is_archivable_evidence(self):
+        self.assertIn("const evidence=(data&&Array.isArray(data.archivable))?data.archivable:[];",
+                      self.blocking_fn)
+        self.assertIn('paintArchivable(evidence,data&&data.archivable_total,data&&data.archivable_truncated);',
+                      self.blocking_fn)
+        # 空列表就整块收起来，不留一个「可归档证据」空壳
+        self.assertIn('area.hidden=!rows.length;', self.archivable_fn)
+        self.assertIn('if(!rows.length)return;', self.archivable_fn)
+        # 换工作区要收干净
+        self.assertIn("$('archivableArea').hidden=true;$('archivableList').textContent='';", self.script)
+
+    def test_checkbox_value_is_the_ledger_id_of_that_evidence(self):
+        self.assertIn('cbox.value=item.ledger_id', self.archivable_fn)
+        self.assertIn("if(typeof item.ledger_id==='string'&&item.ledger_id){", self.archivable_fn)
+        self.assertIn('cbox.type=checkbox', self.archivable_fn.replace("'", ''))
+        self.assertIn('archiveCandidates.set(item.ledger_id,cbox)', self.archivable_fn)
+        self.assertIn('cbox.checked=archiveSelection.has(item.ledger_id)', self.archivable_fn)
+        # 选中集合仍由 refreshArchiveSelection 按「还在候选里」剪枝
+        self.assertIn('refreshArchiveSelection();', self.archivable_fn)
+        self.assertIn('rows.forEach(', self.archivable_fn)
+
+    def test_blocking_rows_are_display_only_now(self):
+        # 未核对行不许再建勾选框、不许登记成归档候选：勾了必然被 SEND_LEDGER_UNRESOLVED 拒绝
+        for gone in ("createElement('input')", 'cbox', 'archiveCandidates.set(',
+                     'archiveSelection.has('):
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, self.blocking_fn)
+        # 但它们原来那套核对动作一个字没少
+        self.assertIn('resolveOutcome(item.ledger_id', self.blocking_fn)
+        self.assertIn('items.forEach(', self.blocking_fn)
+
+    def test_request_still_carries_ledger_ids_from_the_selection(self):
+        self.assertIn('const ids=[...archiveSelection];', self.select_fn)
+        self.assertIn('{ledger_ids:ids,confirmed_by:by}', self.select_fn)
+        self.assertIn("api('applicant/chat/outcome/archive'", self.select_fn)
+        self.assertIn('if(!ids.length){', self.select_fn)
+        # 确认文案两条底线不能丢
+        self.assertIn('仍会拦住重复发送', self.select_fn)
+        self.assertIn('不会解除未核对记录', self.select_fn)
+
+    def test_truncation_is_stated_instead_of_silently_dropped(self):
+        # 总数与截断标记从响应原样传进渲染函数
+        self.assertIn('data.archivable_total', self.blocking_fn)
+        self.assertIn('data.archivable_truncated', self.blocking_fn)
+        self.assertIn('truncated===true', self.archivable_fn)
+        self.assertIn('只列最近', self.archivable_fn)
+        self.assertIn('可归档共', self.archivable_fn)
+
+    def test_only_text_content_no_markup_and_no_delivery_claims(self):
+        self.assertNotIn('innerHTML', self.archivable_fn)
+        self.assertNotIn('innerHTML', self.panel)
+        self.assertIn('textContent=', self.archivable_fn)
+        for phrase in ('发送失败', '已送达', '送达成功', '发送成功', '平台已读'):
+            with self.subTest(phrase=phrase):
+                self.assertNotIn(phrase, self.panel)
+
+
 if __name__ == '__main__':
     unittest.main()
