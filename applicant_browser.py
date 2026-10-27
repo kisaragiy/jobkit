@@ -304,16 +304,21 @@ def check_connection():
             'page_types': types, 'status': 'page_found_unverified' if types else 'no_applicant_page'}
 
 
-def read_current_jobs(*, diagnostics=False, identity=False, salary=False, reset_viewport=False, binding_check=False):
+def read_current_jobs(*, diagnostics=False, identity=False, salary=False, reset_viewport=False,
+                      binding_check=False, execution=None):
     if diagnostics or reset_viewport:
         require_maintenance()
     if sum((diagnostics, identity, salary, reset_viewport, binding_check)) > 1:
         raise KernelError('INVALID_BROWSER_REQUEST', '一次只能执行一种固定页面读取。', 400)
-    context = current_execution('runtime.applicant.browser.inspect' if diagnostics else
-                                'runtime.applicant.browser.binding.check' if binding_check else
-                                'runtime.applicant.browser.viewport.reset' if reset_viewport else
-                                'runtime.applicant.identity.read' if identity else
-                                'runtime.applicant.salary.read' if salary else 'runtime.applicant.jobs.read')
+    # execution 由调用方工具名覆盖：search.step 之类的状态型工具若落到默认的
+    # 'jobs.read'，require_registered 会因能力名不匹配抛 KERNEL_REQUIRED
+    # （2026-10-27 live 实测踩到：测试把本函数整个 mock 掉，所以从没暴露）。
+    default_name = ('runtime.applicant.browser.inspect' if diagnostics else
+                    'runtime.applicant.browser.binding.check' if binding_check else
+                    'runtime.applicant.browser.viewport.reset' if reset_viewport else
+                    'runtime.applicant.identity.read' if identity else
+                    'runtime.applicant.salary.read' if salary else 'runtime.applicant.jobs.read')
+    context = current_execution(execution or default_name)
     with store.runtime_db() as c:
         owner = c.execute("SELECT 1 FROM runtime_tasks WHERE scope_id=? AND tool='runtime.applicant.browser.open' AND status='completed' LIMIT 1", (context['scope_id'],)).fetchone()
     if owner is None:

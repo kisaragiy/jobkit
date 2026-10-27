@@ -27,6 +27,7 @@ import applicant_salary_review
 import applicant_binding
 import applicant_reply
 import applicant_reply_window
+import applicant_reply_windows
 import applicant_send
 import math
 from copy import deepcopy
@@ -929,9 +930,19 @@ def applicant_reply_get(payload,context):
                 'sending_enabled':False}
 
 
+def window_key(payload):
+    """Optional conversation key; absent means the legacy global window (older clients unchanged)."""
+    if 'conversation_key' not in payload:
+        return applicant_reply_window.DEFAULT_CONVERSATION_KEY
+    try:
+        return applicant_reply_windows.checked_key(payload['conversation_key'])
+    except ValueError:
+        raise KernelError('INVALID_CONVERSATION_KEY','会话键必须是 1..128 个不含空白的可见字符；不要用显示名，同名 HR 会串。',400) from None
+
+
 def reply_window_observation(c,context,payload):
     required={'message_observation_task_id','expected_revision','expected_profile_revision','expected_binding_revision'}
-    if (set(payload)!=required or not isinstance(payload.get('message_observation_task_id'),str)
+    if (set(payload)-{'conversation_key'}!=required or not isinstance(payload.get('message_observation_task_id'),str)
             or not re.fullmatch(r'[0-9a-f]{32}',payload['message_observation_task_id'])
             or type(payload.get('expected_revision')) is not int or payload['expected_revision']<0
             or any(type(payload.get(k)) is not int or payload[k]<1 for k in ('expected_profile_revision','expected_binding_revision'))):
@@ -961,7 +972,8 @@ def applicant_reply_window_update(payload,context,*,advance=False):
     with store.runtime_db() as c:
         c.execute('BEGIN IMMEDIATE');check_context(c,context['context_token'])
         source,selected,profile,binding_doc,binding=reply_window_observation(c,context,payload)
-        document,previous=applicant_reply_window.read(c,context['scope_id'])
+        key=window_key(payload)
+        document,previous=applicant_reply_window.read(c,context['scope_id'],key)
         if document['revision']!=payload['expected_revision']:
             raise KernelError('STALE_REPLY_WINDOW','观察边界已更新，请重新读取。')
         if advance:
@@ -982,19 +994,32 @@ def applicant_reply_window_update(payload,context,*,advance=False):
                      'started_at':source['updated_at'],'last_observed_at':source['updated_at'],
                      'start_observation_task_id':source['task_id'],'last_observation_task_id':source['task_id'],
                      'tail_message_id':selected['messages'][-1]['message_id'],'seen':seen,'sending_enabled':False,'automatic_polling':False}
-        revision=document['revision']+1
+        try:
+            container=(applicant_reply_windows.advance(document['container'],key,content,now=source['updated_at'])
+                       if advance else applicant_reply_windows.rebuild(document['container'],key,content,now=source['updated_at']))
+        except applicant_reply_windows.ExpiredError:
+            raise KernelError('WINDOW_GAP_EXCEEDED','消息观察窗口已过期，不能接着推进；请重新建立观察起点。') from None
+        except applicant_reply_windows.CapacityError:
+            raise KernelError('WINDOW_KEY_CAPACITY_REACHED','同时观察的会话已达上限，请先结束或等待旧会话过期；未过期的会话不会被丢弃。') from None
+        except applicant_reply_windows.WindowStoreError:
+            raise KernelError('STALE_REPLY_WINDOW','观察起点已变化或记录损坏，请重新读取后重建观察起点。') from None
+        revision=applicant_reply_windows.get(container,key)['revision']
         applicant_reply_window.checked({'revision':revision,'content':content},context['scope_id'])
         c.execute('INSERT INTO runtime_documents VALUES (?,?,?,?) ON CONFLICT(scope_id,kind) DO UPDATE SET revision=excluded.revision,content=excluded.content',
-                  (context['scope_id'],applicant_reply_window.KIND,revision,json.dumps(content,ensure_ascii=False)))
+                  (context['scope_id'],applicant_reply_window.KIND,document['document_revision']+1,json.dumps(container,ensure_ascii=False)))
         return record_commit(c,context,tool,{'kind':applicant_reply_window.KIND,'revision':revision,'content':content})
 
 
 def applicant_reply_window_get(payload,context):
     applicant_only(context)
-    if payload:raise KernelError('INVALID_REPLY_WINDOW','只能读取当前工作区的消息观察边界。',400)
+    if set(payload)-{'conversation_key'}:raise KernelError('INVALID_REPLY_WINDOW','只能读取当前工作区的消息观察边界。',400)
+    key=window_key(payload)
     with store.runtime_db() as c:
-        check_context(c,context['context_token']);document,content=applicant_reply_window.read(c,context['scope_id'])
-    return {'revision':document['revision'],'content':content,'observation_gap_ok':bool(content and 0<=time.time()-content['last_observed_at']<=120),
+        check_context(c,context['context_token']);document,content=applicant_reply_window.read(c,context['scope_id'],key)
+        now=time.time()
+        windows=[applicant_reply_windows.public(item,now) for item in applicant_reply_windows.items(document['container'])]
+    return {'revision':document['revision'],'content':content,'conversation_key':key,'document_revision':document['document_revision'],
+            'windows':windows,'observation_gap_ok':bool(content and 0<=now-content['last_observed_at']<=120),
             'automatic_polling':False,'sending_enabled':False}
 
 
@@ -1052,7 +1077,7 @@ def applicant_reply_preflight(payload,context):
         if (any(again[k]!=task[k] for k in ('status','result','manual_revision','manual_text','review_status','review_revision','superseded_by_task_id'))
                 or store.runtime_document(c,context['scope_id'],'profile')!=profile
                 or store.runtime_document(c,context['scope_id'],'applicant_browser_binding')!=binding_doc
-                or store.runtime_document(c,context['scope_id'],applicant_reply_window.KIND)!=window_doc):
+                or store.runtime_document(c,context['scope_id'],applicant_reply_window.KIND)['revision']!=window_doc['document_revision']):
             raise KernelError('PREFLIGHT_STATE_CHANGED','检查期间草稿、资料、会话或观察边界变化，请重新检查。')
     now=time.time()
     return {'intent_id':intent['intent_id'],'draft_task_id':task['task_id'],'manual_revision':task['manual_revision'],
@@ -1768,7 +1793,19 @@ def applicant_search_step(payload, context):
     else:
         if scroll is not None:
             time.sleep(1.2)
-        observation = applicant_browser.read_current_jobs()
+        observation = applicant_browser.read_current_jobs(
+            execution='runtime.applicant.jobs.search.step')
+        # 刚导航完立刻读，页面可能还没渲染出岗位卡片 → 会误判 schema_changed。
+        # 2026-10-27 live 实测：同一页面再读一次就是 observed/15 条。
+        # 有界重试（最多 2 次、每次 0.8s）；仍然读不到才保留 schema_changed，
+        # 不放宽「结构变化」这个判据，也不是把失败折叠成空列表。
+        if observation['status'] == 'schema_changed' and combo['pages'] == 0:
+            for _ in range(2):
+                time.sleep(0.8)
+                observation = applicant_browser.read_current_jobs(
+                    execution='runtime.applicant.jobs.search.step')
+                if observation['status'] != 'schema_changed':
+                    break
     if observation['status'] not in {'observed', 'empty', 'restricted', 'auth_required', 'schema_changed'}:
         observation = {'status': 'unavailable', 'jobs': []}
     with store.runtime_db() as c:

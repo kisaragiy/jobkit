@@ -5,11 +5,14 @@ import math
 import re
 import store
 import applicant_messages
+import applicant_reply_windows
 from sandbox import KernelError
 
 KIND='applicant_reply_window'
 GAP_SECONDS=120
 MAX_SEEN=200
+DEFAULT_CONVERSATION_KEY=applicant_reply_windows.DEFAULT_KEY
+
 
 
 def usable_id(value):
@@ -61,32 +64,58 @@ def checked(document,scope_id):
         raise KernelError('INVALID_REPLY_WINDOW','消息观察边界记录无法完整核对。') from None
 
 
-def read(c,scope_id):
+def container_of(document):
+    """Storage container for one workspace; migrates the legacy flat window on read."""
     try:
+        return applicant_reply_windows.load(document['content'],document['revision'])
+    except (TypeError,KeyError,ValueError):
+        raise KernelError('INVALID_REPLY_WINDOW','消息观察边界记录无法完整核对。') from None
+
+
+def view(document,container,conversation_key):
+    """Per-key projection: revision is this key's own revision, never another session's."""
+    item=applicant_reply_windows.get(container,conversation_key)
+    return {'revision':item['revision'] if item else 0,'content':item['window'] if item else {},
+            'document_revision':document['revision'],'conversation_key':conversation_key,'container':container},item
+
+
+def witnessed(c,scope_id,data):
+    sources=[]
+    for key,time_key in (('start_observation_task_id','started_at'),('last_observation_task_id','last_observed_at')):
+        row=c.execute('SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?',(data[key],scope_id)).fetchone()
+        observed=json.loads(row['result']) if row is not None else None
+        if (row is None or row['tool']!='runtime.applicant.messages.read' or row['status']!='completed'
+                or row['context_token']!=data['context_token'] or row['updated_at']!=data[time_key]
+                or observed['source_type']!='boss_selected_message_dom' or observed['binding_revision']!=data['binding_revision']):
+            raise ValueError('missing observation witness')
+        selected=snapshot(observed)
+        if selected['party']!=data['party']:raise ValueError('different party')
+        sources.append(selected)
+    baseline_ids={m['message_id'] for m in sources[0]['messages'] if usable_id(m['message_id'])}
+    if any(data['seen'][identity]['new_after_start'] for identity in baseline_ids if identity in data['seen']):
+        raise ValueError('baseline message marked new')
+    if sources[-1]['messages'][-1]['message_id']!=data['tail_message_id']:raise ValueError('invalid anchor')
+    for message in sources[-1]['messages']:
+        if usable_id(message['message_id']):
+            if data['seen'].get(message['message_id'],{}).get('digest')!=message_digest(message):raise ValueError('invalid message witness')
+    return data
+
+
+def read(c,scope_id,conversation_key=DEFAULT_CONVERSATION_KEY):
+    """Read one conversation's window. Defaults to the legacy key, so older callers are unchanged."""
+    try:
+        key=applicant_reply_windows.checked_key(conversation_key)
         document=store.runtime_document(c,scope_id,KIND)
-        if not document['revision']:return document,None
-        data=checked(document,scope_id)
-        sources=[]
-        for key,time_key in (('start_observation_task_id','started_at'),('last_observation_task_id','last_observed_at')):
-            row=c.execute('SELECT * FROM runtime_tasks WHERE task_id=? AND scope_id=?',(data[key],scope_id)).fetchone()
-            observed=json.loads(row['result']) if row is not None else None
-            if (row is None or row['tool']!='runtime.applicant.messages.read' or row['status']!='completed'
-                    or row['context_token']!=data['context_token'] or row['updated_at']!=data[time_key]
-                    or observed['source_type']!='boss_selected_message_dom' or observed['binding_revision']!=data['binding_revision']):
-                raise ValueError('missing observation witness')
-            selected=snapshot(observed)
-            if selected['party']!=data['party']:raise ValueError('different party')
-            sources.append(selected)
-        baseline_ids={m['message_id'] for m in sources[0]['messages'] if usable_id(m['message_id'])}
-        if any(data['seen'][identity]['new_after_start'] for identity in baseline_ids if identity in data['seen']):
-            raise ValueError('baseline message marked new')
-        if sources[-1]['messages'][-1]['message_id']!=data['tail_message_id']:raise ValueError('invalid anchor')
-        for message in sources[-1]['messages']:
-            if usable_id(message['message_id']):
-                if data['seen'].get(message['message_id'],{}).get('digest')!=message_digest(message):raise ValueError('invalid message witness')
-        return document,data
+        if not document['revision']:
+            return {'revision':0,'content':{},'document_revision':0,'conversation_key':key,
+                    'container':applicant_reply_windows.empty()},None
+        container=container_of(document)
+        projection,item=view(document,container,key)
+        if item is None:return projection,None
+        return projection,witnessed(c,scope_id,checked({'revision':item['revision'],'content':item['window']},scope_id))
     except (TypeError,ValueError,KeyError,RecursionError,KernelError):
         raise KernelError('INVALID_REPLY_WINDOW','消息观察边界与原读取记录无法对应。') from None
+
 
 
 def advance(previous,current,observed_at):

@@ -99,9 +99,13 @@ class SendTargetTest(unittest.TestCase):
         with store.runtime_db() as c:
             c.execute('UPDATE runtime_tasks SET updated_at=? WHERE task_id=?',(past,self.source))
             row=c.execute("SELECT content FROM runtime_documents WHERE kind='applicant_reply_window'").fetchone()
-            content=json.loads(row['content']);content['last_observed_at']=past;content['started_at']=past-10
+            # 存储形状在 p11 变为按会话键的 {items:[{key,revision,window}]}；断言（WINDOW_GAP_EXCEEDED）不变，
+            # 只把定点改写指向默认键那份窗口。旧形状仍可读，故这里兼容两种形状。
+            stored=json.loads(row['content'])
+            content=stored['items'][0]['window'] if 'items' in stored else stored
+            content['last_observed_at']=past;content['started_at']=past-10
             for entry in content['seen'].values():entry['first_seen_at']=past-5
-            c.execute("UPDATE runtime_documents SET content=? WHERE kind='applicant_reply_window'",(json.dumps(content,ensure_ascii=False),))
+            c.execute("UPDATE runtime_documents SET content=? WHERE kind='applicant_reply_window'",(json.dumps(stored,ensure_ascii=False),))
             c.execute('UPDATE runtime_tasks SET updated_at=? WHERE task_id=?',(past-10,content['start_observation_task_id']))
         with self.assertRaises(KernelError) as caught:self.confirm()
         self.assertEqual(caught.exception.code,'WINDOW_GAP_EXCEEDED')

@@ -84,6 +84,18 @@ def cli():
                 if not opened['ok']:
                     print(json.dumps(opened, ensure_ascii=False))
                     return 1
+                # 导航没成功就必须报错退出：否则下面的 step 只会返回 navigation_required，
+                # CLI 打印 0 页 0 岗位还退出 0 —— 那正是「把失败当成没有岗位」（方案 G2 第 121 行）。
+                navigation = (opened.get('data') or {}).get('navigation') or {}
+                if navigation.get('status') != 'navigation_requested':
+                    reason = navigation.get('status') or (opened.get('data') or {}).get('status')
+                    hint = {'page_selection_required': '浏览器里有多个 BOSS 搜索页，请只保留一个再跑',
+                            'jobs_page_required': '没有找到 BOSS 搜索页，请先打开一次岗位列表',
+                            'unavailable': '连不上浏览器调试端口（9222）'}.get(reason, '导航没有执行')
+                    print(json.dumps({'ok': False, 'code': 'SEARCH_NAVIGATION_FAILED',
+                                      'status': reason, 'message': hint},
+                                     ensure_ascii=False), file=sys.stderr)
+                    return 2
                 for _ in range(args.pages):
                     step = dispatch('runtime.applicant.jobs.search.step', {}, context['context_token'])
                     event = step['data'].get('event') or {}
@@ -92,11 +104,24 @@ def cli():
                                       'jobs': step['data']['state']['counts']['jobs'],
                                       'stop_reason': step['data']['state']['stop_reason']},
                                      ensure_ascii=False))
-                    if step['data']['status'] in {'navigation_required', 'finished'} or \
+                    if step['data']['status'] == 'navigation_required':
+                        print(json.dumps({'ok': False, 'code': 'SEARCH_NAVIGATION_REQUIRED',
+                                          'next': step['data'].get('next'),
+                                          'message': '下一组城市×关键词需要重新导航；本次未继续读取。'},
+                                         ensure_ascii=False), file=sys.stderr)
+                        return 2
+                    if step['data']['status'] == 'finished' or \
                             step['data']['state']['status'] != 'running':
                         break
                 summary = dispatch('runtime.applicant.jobs.search.get', {}, context['context_token'])
             print(json.dumps(summary, ensure_ascii=False))
+            state = summary['data']['state']
+            if state is not None and not state['counts']['pages_read'] and not state['stop_reason']:
+                # 一页都没读成，也没有正常停止理由：这是失败，不是「没有岗位」。
+                print(json.dumps({'ok': False, 'code': 'SEARCH_READ_NO_PAGE',
+                                  'message': '一页都没读成，检查浏览器页面与登录态。'},
+                                 ensure_ascii=False), file=sys.stderr)
+                return 2
             if args.details and summary['data']['state'] is not None:
                 # 只补缺口：每次最多 args.details 条，读完就停；单条失败已在 results 里。
                 for _ in range(summary['data']['state']['counts']['jobs'] or 1):

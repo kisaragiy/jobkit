@@ -405,8 +405,9 @@ def runtime_applicant_reply_get_api(request:Request,intent_id:str):
 
 
 @app.get('/api/runtime/applicant/reply-window')
-def runtime_reply_window_get_api(request:Request):
-    return runtime_call(request,'runtime.applicant.reply.window.get',{})
+def runtime_reply_window_get_api(request:Request,conversation_key:str|None=None):
+    payload={'conversation_key':conversation_key} if conversation_key else {}
+    return runtime_call(request,'runtime.applicant.reply.window.get',payload)
 
 
 @app.post('/api/runtime/applicant/reply-window/start')
