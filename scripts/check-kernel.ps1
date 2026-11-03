@@ -1,4 +1,10 @@
 # Developer-only offline kernel gate. No platform login or send commands.
+# 分层：-Tier fast|safety|full 只决定「什么时候跑」，不决定「跑不跑」。
+# full 永远保留（nightly + 发布前手动），只有 full 能当发布凭据；任何层的通过都不得替代 full。
+param(
+    [ValidateSet('fast', 'safety', 'full')]
+    [string]$Tier = 'full'
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $jobkitRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -102,13 +108,43 @@ try {
         'test_schedule', 'test_today', 'test_independence', 'test_chat_read_state',
         'test_greet_snapshot'
     )
+    # 实测分层（本机 90 模块总 585s）：fast 33 个约 14s；safety = fast + 安全边界，约 4-5 分钟；
+    # full = 上面完整列表。列表改动必须同时更新本注释里的数量，避免注释与代码漂移。
+    $jobkitFastTests = @(
+        'test_filters', 'test_pace', 'test_source_routing', 'test_apply_retry',
+        'test_applicant_job_search', 'test_applicant_job_match', 'test_applicant_job_detail',
+        'test_applicant_action', 'test_applicant_greeting', 'test_applicant_conversation',
+        'test_schedule', 'test_today', 'test_greet_snapshot', 'test_dom_channel',
+        'test_exec_runners', 'test_startup_safety', 'test_kernel_boundary',
+        'test_concurrency_probe', 'test_send_ledger', 'test_delivery_intent',
+        'test_followup', 'test_followup_execution_safety', 'test_execution_names',
+        'test_independence', 'test_local_access', 'test_scripts_encoding',
+        'test_version_endpoint', 'test_api_contract', 'test_workspace_ui_contract',
+        'test_chat_read_state', 'test_reply_draft', 'test_reply_loop',
+        'test_port_consistency.TestPortConsistency.test_all_files_agree'
+    )
+    $jobkitSafetyTests = $jobkitFastTests + @(
+        'test_kernel_integration', 'test_kernel_observability', 'test_runtime_kernel',
+        'test_runtime_api', 'test_runtime_recovery', 'test_execution_receipts',
+        'test_control_receipts', 'test_ledger_snapshot', 'test_outcome_gate',
+        'test_send_ledger_archive', 'test_acceptance_regression', 'test_data_retention',
+        'test_run_state', 'test_action_contract', 'test_api_contract_http',
+        'test_restore_preflight', 'test_restore_commit', 'test_workspace_export',
+        'test_applicant_send', 'test_applicant_forget', 'test_applicant_roundtrip',
+        'test_port_consistency.TestPortConsistency.test_renderer_uses_its_serving_origin'
+    )
+    switch ($Tier) {
+        'fast' { $jobkitTests = $jobkitFastTests }
+        'safety' { $jobkitTests = $jobkitSafetyTests }
+    }
+    Write-Host ('TIER=' + $Tier + ' modules=' + $jobkitTests.Count)
     # 无缓冲 + 先落盘再回显：进程如果崩在中途，Tee 缓冲会丢掉堆栈尾部，
     # 而文件句柄由 Python 自己持有，崩溃时 OS 会 flush。artifact 已收集 kernel-check*/**/*.log。
     $jobkitLog = Join-Path $jobkitRun 'python-unittest.log'
     & python -u -m unittest -v @jobkitTests *> $jobkitLog
     $jobkitExitCode = $LASTEXITCODE
     if (Test-Path $jobkitLog) { Get-Content -Path $jobkitLog -Encoding utf8 | ForEach-Object { Write-Host $_ } }
-    if ($jobkitExitCode -eq 0) {
+    if ($jobkitExitCode -eq 0 -and $Tier -ne 'fast') {
         foreach ($jobkitScript in @('test_local_access.js', 'test_delivery_loop.js',
             'test_login_probe.js', 'test_delivery.js', 'test_blocker.js', 'test_workspace.js', 'test_applicant_dom.js', 'test_messages_dom.js', 'test_applicant_job_detail.js')) {
             & node (Join-Path 'shell' $jobkitScript)

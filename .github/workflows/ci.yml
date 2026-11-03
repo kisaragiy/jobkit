@@ -49,11 +49,12 @@ jobs:
         # OCR 模型在干净 runner 上可能不可用，按可选处理（0 通过 / 2 有缺失 / 1 出错）
         run: python scripts/check-deps.py --allow-missing-ocr
 
-      - name: Offline kernel gate (1300+ tests + JS checks)
+      - name: Kernel gate (fast+safety tier)
+        # 完整门禁在 nightly-full.yml 跑（-Tier full）与发布前手动跑；这里只跑安全相关层。
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path tmp | Out-Null
-          & pwsh -NoProfile -File ./scripts/check-kernel.ps1 *>&1 | Tee-Object -FilePath tmp/ci-gate.log
+          & pwsh -NoProfile -File ./scripts/check-kernel.ps1 -Tier safety *>&1 | Tee-Object -FilePath tmp/ci-gate.log
           $jobkitGateExit = $LASTEXITCODE
           exit $jobkitGateExit
 
