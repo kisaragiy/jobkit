@@ -496,10 +496,7 @@ def runtime_model_interrupt(context, database=None):
     """Bounded read-only signal probe; never initializes or mutates the database."""
     path = Path(database if database is not None else DB_PATH).resolve()
     try:
-        # 有界探测，但 20ms 在慢磁盘/并发写入的 CI runner 上会拿到 database is locked，
-        # 于是把「facts 变了」误报成 MODEL_MONITOR_FAILED（公开仓 full CI 实测，2026-11-04）。
-        # 250ms 仍是快速失败上限，只去掉慢机器的假阴性。
-        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.25)
+        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.02)
         try:
             c.execute('BEGIN')
             active = c.execute('SELECT scope_id,context_token FROM runtime_control WHERE id=1').fetchone()
@@ -509,8 +506,14 @@ def runtime_model_interrupt(context, database=None):
             c.close()
     except (sqlite3.Error, OSError):
         return 'MODEL_MONITOR_FAILED'
-    if active is None or task is None:
+    if active is None:
         return 'MODEL_MONITOR_FAILED'
+    if task is None:
+        # 只读连接读的是另一个连接已提交的快照；任务行可能还在主连接未提交的事务里。
+        # 此时既不能说「已停止」也不能说「可以继续」，返回 None 让调用方继续等待，
+        # 最终由 deadline/真实信号给出结论。原先这里返回 MODEL_MONITOR_FAILED，
+        # 会在慢机器上把 LLM_TIMEOUT / STALE_FACTS 等真实原因盖掉（公开仓 full CI 实测）。
+        return None
     if active != (context['scope_id'], context['context_token']):
         return 'STALE_CONTEXT'
     if task[:4] != (context['scope_id'], context['context_token'], 'draft.reply', 'work'):
