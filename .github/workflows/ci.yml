@@ -51,13 +51,19 @@ jobs:
 
       - name: Offline kernel gate (1300+ tests + JS checks)
         shell: pwsh
-        run: ./scripts/check-kernel.ps1
+        run: |
+          New-Item -ItemType Directory -Force -Path tmp | Out-Null
+          & pwsh -NoProfile -File ./scripts/check-kernel.ps1 *>&1 | Tee-Object -FilePath tmp/ci-gate.log
+          $jobkitGateExit = $LASTEXITCODE
+          exit $jobkitGateExit
 
       - name: Upload gate log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: gate-log
-          path: tmp/kernel-check-*/**/*.log
+          path: |
+            tmp/ci-gate.log
+            tmp/kernel-check-*/**/*.log
           if-no-files-found: ignore
           retention-days: 7
