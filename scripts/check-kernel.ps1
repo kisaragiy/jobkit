@@ -102,8 +102,12 @@ try {
         'test_schedule', 'test_today', 'test_independence', 'test_chat_read_state',
         'test_greet_snapshot'
     )
-    & python -m unittest @jobkitTests
+    # 无缓冲 + 先落盘再回显：进程如果崩在中途，Tee 缓冲会丢掉堆栈尾部，
+    # 而文件句柄由 Python 自己持有，崩溃时 OS 会 flush。artifact 已收集 kernel-check*/**/*.log。
+    $jobkitLog = Join-Path $jobkitRun 'python-unittest.log'
+    & python -u -m unittest @jobkitTests *> $jobkitLog
     $jobkitExitCode = $LASTEXITCODE
+    if (Test-Path $jobkitLog) { Get-Content -Path $jobkitLog -Encoding utf8 | ForEach-Object { Write-Host $_ } }
     if ($jobkitExitCode -eq 0) {
         foreach ($jobkitScript in @('test_local_access.js', 'test_delivery_loop.js',
             'test_login_probe.js', 'test_delivery.js', 'test_blocker.js', 'test_workspace.js', 'test_applicant_dom.js', 'test_messages_dom.js', 'test_applicant_job_detail.js')) {
