@@ -62,7 +62,7 @@ class ModelLocalTlsTest(unittest.TestCase):
             timeout=timeout, context=self.client_context)
 
     def wait_for_request(self):
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + WAIT_SECONDS
         while not self.server.requests and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertTrue(self.server.requests)
@@ -85,7 +85,7 @@ class ModelLocalTlsTest(unittest.TestCase):
             future = pool.submit(self.f.h.call, 'runtime.task.execute', {'task_id': task['task_id']})
             self.wait_for_request()
             self.f.h.call('runtime.task.cancel', {'task_id': task['task_id']})
-            result = future.result(timeout=2)
+            result = future.result(timeout=WAIT_SECONDS)
         self.assertEqual(result['status'], 'cancelled')
         self.assertIsNone(result['result'])
         row = self.f.h.call('runtime.model.usage.get')['items'][0]

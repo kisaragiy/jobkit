@@ -100,7 +100,7 @@ class ModelCancellationTest(unittest.TestCase):
             return connection
         self.f.factory.side_effect = tracked
         future = self.start({'trickle_body': True})
-        self.assertTrue(reading_body.wait(2))
+        self.assertTrue(reading_body.wait(WAIT_SECONDS))
         self.cancel()
         self.result(future)
         row = self.report()['items'][0]
@@ -127,7 +127,7 @@ class ModelCancellationTest(unittest.TestCase):
             sock = None
             def connect(inner):
                 entered.set()
-                if not release.wait(3):
+                if not release.wait(WAIT_SECONDS):
                     raise TimeoutError()
             def request(inner, *args, **kwargs):
                 raise AssertionError('cancelled connection must not send')
@@ -135,7 +135,7 @@ class ModelCancellationTest(unittest.TestCase):
                 pass
         self.f.factory.side_effect = lambda timeout: BlockedConnection()
         future = self.start()
-        self.assertTrue(entered.wait(2))
+        self.assertTrue(entered.wait(WAIT_SECONDS))
         self.cancel()
         time.sleep(.1)
         self.assertFalse(future.done())
@@ -172,7 +172,7 @@ print(json.dumps({'status':result['data']['status'],'code':result['data']['error
         try:
             self.wait_for(lambda: bool(self.f.server.requests))
             self.cancel()
-            stdout, stderr = process.communicate(timeout=2)
+            stdout, stderr = process.communicate(timeout=WAIT_SECONDS)
             self.assertEqual(process.returncode, 0, stderr)
             self.assertEqual(json.loads(stdout), {'status': 'cancelled', 'code': 'CANCELLED'})
         finally:
@@ -187,7 +187,7 @@ print(json.dumps({'status':result['data']['status'],'code':result['data']['error
         future = self.start()
         self.wait_for(lambda: bool(self.f.server.requests))
         self.f.h.switch(role='applicant', account='other')
-        self.assertEqual(future.result(timeout=2), {'error': 'STALE_CONTEXT'})
+        self.assertEqual(future.result(timeout=WAIT_SECONDS), {'error': 'STALE_CONTEXT'})
         self.assertEqual(self.report()['items'], [])
         self.f.h.switch()
         row = self.report()['items'][0]
@@ -215,7 +215,7 @@ print(json.dumps({'status':result['data']['status'],'code':result['data']['error
             self.cancel()
             raise KernelError('INVALID_MODEL_CALL_STATE', 'private failure')
         with mock.patch.object(store, 'runtime_model_finish', side_effect=fail_after_cancel):
-            outcome = self.start({'body': fixture.completion()}).result(timeout=2)
+            outcome = self.start({'body': fixture.completion()}).result(timeout=WAIT_SECONDS)
         self.assertEqual(outcome, {'error': 'INVALID_MODEL_CALL_STATE'})
         task = self.f.h.call('runtime.task.get', {'task_id': self.task['task_id']})
         self.assertEqual(task['status'], 'cancelled')
@@ -236,7 +236,7 @@ print(json.dumps({'status':result['data']['status'],'code':result['data']['error
             future = self.start()
             self.wait_for(lambda: bool(self.f.server.requests))
             failed.set()
-            self.assertEqual(future.result(timeout=2), {'error': 'MODEL_MONITOR_FAILED'})
+            self.assertEqual(future.result(timeout=WAIT_SECONDS), {'error': 'MODEL_MONITOR_FAILED'})
         row = self.report()['items'][0]
         self.assertEqual((row['state'], row['error_code']), ('outcome_unknown', 'MODEL_MONITOR_FAILED'))
         self.assertNotIn('private database', str(self.f.h.call('runtime.events')))
@@ -254,7 +254,7 @@ print(json.dumps({'status':result['data']['status'],'code':result['data']['error
         self.f.factory.assert_not_called()
 
     def test_completed_task_cannot_be_retroactively_cancelled(self):
-        result = self.start({'body': fixture.completion()}).result(timeout=2)['response']['data']
+        result = self.start({'body': fixture.completion()}).result(timeout=WAIT_SECONDS)['response']['data']
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(self.cancel()['data'], result)
         self.assertEqual(self.f.factory.call_count, 1)
