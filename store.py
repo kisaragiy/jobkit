@@ -496,7 +496,12 @@ def runtime_model_interrupt(context, database=None):
     """Bounded read-only signal probe; never initializes or mutates the database."""
     path = Path(database if database is not None else DB_PATH).resolve()
     try:
-        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.02)
+        # 有界探测，但 20ms 太紧：SQLite 默认 busy timeout 是 5s，这里只有 0.4%。
+        # 多进程写台账时的锁竞争会让这次读抛 OperationalError，于是把真实原因
+        # （STALE_FACTS / LLM_TIMEOUT）盖成 MODEL_MONITOR_FAILED。
+        # 依据：独立复现 4 次跑出 1 次失败（约 25%），失败点都在这条只读连接的锁等待上。
+        # 500ms 仍是快速失败上限，只去掉慢机器/并发下的假阴性；读不到时依旧保守停止。
+        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.5)
         try:
             c.execute('BEGIN')
             active = c.execute('SELECT scope_id,context_token FROM runtime_control WHERE id=1').fetchone()
