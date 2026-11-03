@@ -65,26 +65,12 @@ SEPARATOR = "═" * 62
 def _pid_alive(pid) -> bool:
     """pid 还活着吗。查不出来按「活的」处理（保守，宁可少跑不并发）。
 
-    Windows 上 os.kill(pid, 0) 对不存在的 pid 抛 OSError(winerror=87)，
-    对存在但没权限的进程抛 PermissionError —— 两种要和 ProcessLookupError 分开。
+    实现见 process_liveness.pid_alive：Windows 上**不用** os.kill(pid, 0) ——
+    signal.CTRL_C_EVENT == 0，那等于向控制台进程组发 Ctrl-C，会让调用方自己收到
+    KeyboardInterrupt（CI 上连续三轮因此崩在锁用例，2026-11-04 定位）。
     """
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return False
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError as exc:
-        if getattr(exc, "winerror", None) == 87:    # ERROR_INVALID_PARAMETER：pid 不存在
-            return False
-        return True
+    from process_liveness import pid_alive
+    return pid_alive(pid)
 
 
 def acquire_lock(path=LOCK_FILE) -> tuple[bool, str]:
