@@ -21,6 +21,9 @@ import llm_transport
 import test_llm_transport as fixture
 from sandbox import KernelError
 
+# CI runner 比本机慢数倍：固定 2–3 秒的等待会假失败。上限可调，默认放宽。
+WAIT_SECONDS = float(os.environ.get('JOBKIT_TEST_WAIT_SECONDS', '15'))
+
 
 class ModelLocalTlsTest(unittest.TestCase):
     def setUp(self):
@@ -109,9 +112,9 @@ class ModelLocalTlsTest(unittest.TestCase):
         task = self.task()
         with ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(self.f.h.call, 'runtime.task.execute', {'task_id': task['task_id']})
-            self.assertTrue(reading.wait(3))
+            self.assertTrue(reading.wait(WAIT_SECONDS))
             self.f.h.call('runtime.task.cancel', {'task_id': task['task_id']})
-            self.assertEqual(future.result(timeout=2)['status'], 'cancelled')
+            self.assertEqual(future.result(timeout=WAIT_SECONDS)['status'], 'cancelled')
         row = self.f.h.call('runtime.model.usage.get')['items'][0]
         self.assertEqual(row['http_status'], 200)
         self.assertEqual(row['state'], 'outcome_unknown')

@@ -18,6 +18,9 @@ import main
 import store
 import test_llm_transport as fixture
 from sandbox import KernelError
+
+# CI runner 比本机慢数倍：固定 2–3 秒的等待会假失败。上限可调，默认放宽。
+WAIT_SECONDS = float(os.environ.get('JOBKIT_TEST_WAIT_SECONDS', '15'))
 from task_lease import task_lease
 
 
@@ -42,7 +45,8 @@ class ModelCancellationTest(unittest.TestCase):
         return self.pool.submit(run)
 
     def wait_for(self, predicate):
-        deadline = time.monotonic() + 3
+        # 慢环境（CI runner 比本机慢数倍）下固定 3 秒会假失败；用可调上限，默认放宽。
+        deadline = time.monotonic() + WAIT_SECONDS
         while not predicate() and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertTrue(predicate())
@@ -54,7 +58,7 @@ class ModelCancellationTest(unittest.TestCase):
         return self.f.h.call('runtime.model.usage.get')
 
     def result(self, future):
-        outcome = future.result(timeout=2)
+        outcome = future.result(timeout=WAIT_SECONDS)
         self.assertNotIn('error', outcome)
         task = outcome['response']['data']
         self.assertEqual(task['status'], 'cancelled')
