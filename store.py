@@ -504,9 +504,11 @@ def runtime_model_interrupt(context, database=None):
                              (context['task_id'],)).fetchone()
         finally:
             c.close()
-    except (sqlite3.Error, OSError):
+    except (sqlite3.Error, OSError) as error:
+        print('\n[DIAG monitor] sqlite/os error: %s: %s' % (type(error).__name__, error), flush=True)
         return 'MODEL_MONITOR_FAILED'
     if active is None:
+        print('\n[DIAG monitor] active=None task=%r' % (task,), flush=True)
         return 'MODEL_MONITOR_FAILED'
     if task is None:
         # 只读连接读的是另一个连接已提交的快照；任务行可能还在主连接未提交的事务里。
@@ -517,6 +519,7 @@ def runtime_model_interrupt(context, database=None):
     if active != (context['scope_id'], context['context_token']):
         return 'STALE_CONTEXT'
     if task[:4] != (context['scope_id'], context['context_token'], 'draft.reply', 'work'):
+        print('\n[DIAG monitor] task mismatch: got=%r want=%r' % (task[:4], (context['scope_id'], context['context_token'], 'draft.reply', 'work')), flush=True)
         return 'MODEL_MONITOR_FAILED'
     if task[4] == 'cancelled':
         return 'CANCELLED'
