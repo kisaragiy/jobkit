@@ -507,15 +507,11 @@ def runtime_model_interrupt(context, database=None):
     except (sqlite3.Error, OSError) as error:
         print('\n[DIAG monitor] sqlite/os error: %s: %s' % (type(error).__name__, error), flush=True)
         return 'MODEL_MONITOR_FAILED'
-    if active is None:
-        print('\n[DIAG monitor] active=None task=%r' % (task,), flush=True)
+    if active is None or task is None:
+        # 保持保守：读不到控制记录或任务行时停止等待。曾试过「task is None 就当未提交继续等」，
+        # 但没有证据支撑，且 full CI 失败数从 2 涨到 12（2026-11-04 回退）。
+        print('\n[DIAG monitor] active=%r task=%r' % (active, task), flush=True)
         return 'MODEL_MONITOR_FAILED'
-    if task is None:
-        # 只读连接读的是另一个连接已提交的快照；任务行可能还在主连接未提交的事务里。
-        # 此时既不能说「已停止」也不能说「可以继续」，返回 None 让调用方继续等待，
-        # 最终由 deadline/真实信号给出结论。原先这里返回 MODEL_MONITOR_FAILED，
-        # 会在慢机器上把 LLM_TIMEOUT / STALE_FACTS 等真实原因盖掉（公开仓 full CI 实测）。
-        return None
     if active != (context['scope_id'], context['context_token']):
         return 'STALE_CONTEXT'
     if task[:4] != (context['scope_id'], context['context_token'], 'draft.reply', 'work'):
