@@ -235,7 +235,17 @@ class LockTest(_TmpCase):
     def test_dead_pid_lock_is_reclaimed(self):
         self.lock_path.write_text(json.dumps({"pid": 99999999, "at": time.time()}),
                                   encoding="utf-8")
-        ok, why = run_schedule.acquire_lock(self.lock_path)
+        # CI 上该用例连续多轮在 acquire_lock 处被中断（本机始终通过）。打印耗时与异常类型，
+        # 让日志自己说明是「卡住被中断」还是「抛了别的异常」，不吞异常。
+        started = time.time()
+        try:
+            ok, why = run_schedule.acquire_lock(self.lock_path)
+        except BaseException as error:
+            print('\n[DIAG dead-pid] raise %s after %.1fs: %r'
+                  % (type(error).__name__, time.time() - started, error), flush=True)
+            raise
+        print('\n[DIAG dead-pid] ok=%s after %.1fs why=%r'
+              % (ok, time.time() - started, why), flush=True)
         self.assertTrue(ok, f"死进程的锁应该能抢占：{why}")
         run_schedule.release_lock(self.lock_path)
 
