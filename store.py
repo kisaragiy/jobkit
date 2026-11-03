@@ -496,7 +496,10 @@ def runtime_model_interrupt(context, database=None):
     """Bounded read-only signal probe; never initializes or mutates the database."""
     path = Path(database if database is not None else DB_PATH).resolve()
     try:
-        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.02)
+        # 有界探测，但 20ms 在慢磁盘/并发写入的 CI runner 上会拿到 database is locked，
+        # 于是把「facts 变了」误报成 MODEL_MONITOR_FAILED（公开仓 full CI 实测，2026-11-04）。
+        # 250ms 仍是快速失败上限，只去掉慢机器的假阴性。
+        c = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=0.25)
         try:
             c.execute('BEGIN')
             active = c.execute('SELECT scope_id,context_token FROM runtime_control WHERE id=1').fetchone()
